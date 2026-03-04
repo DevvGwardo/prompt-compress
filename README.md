@@ -1,5 +1,9 @@
 # prompt-compress
 
+[![Release](https://img.shields.io/github/v/release/DevvGwardo/prompt-compress?label=release)](https://github.com/DevvGwardo/prompt-compress/releases)
+[![License](https://img.shields.io/github/license/DevvGwardo/prompt-compress)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org/)
+
 Prompt compression for LLM systems, built in Rust.
 
 `prompt-compress` removes low-signal words before an LLM call while preserving intent and protected content. It gives you explicit token metrics so you can track cost and latency impact in production.
