@@ -2,7 +2,7 @@ use std::io::{self, Read};
 
 use anyhow::Result;
 use clap::Parser;
-use compress_core::{CompressionSettings, Compressor, HeuristicScorer};
+use compress_core::{find_model, CompressionSettings, Compressor, HeuristicScorer, OnnxScorer};
 
 /// LLM prompt compression tool — reduce token count while preserving meaning.
 #[derive(Parser, Debug)]
@@ -23,6 +23,14 @@ struct Args {
     /// Target LLM model for token counting.
     #[arg(short = 'm', long, default_value = "gpt-4")]
     target_model: String,
+
+    /// Use ONNX model for scoring (default: heuristic).
+    #[arg(long)]
+    onnx: bool,
+
+    /// Path to model directory (contains model.onnx and tokenizer.json).
+    #[arg(long, env = "PROMPT_COMPRESS_MODEL")]
+    model_dir: Option<String>,
 
     /// Show compression statistics.
     #[arg(short, long)]
@@ -72,8 +80,19 @@ fn main() -> Result<()> {
         std::process::exit(1);
     }
 
-    let scorer = HeuristicScorer::new();
-    let compressor = Compressor::new(Box::new(scorer), &args.target_model)?;
+    // Create scorer based on user preference
+    let compressor = if args.onnx {
+        let model_dir = match args.model_dir {
+            Some(dir) => dir,
+            None => find_model()?.to_string_lossy().to_string(),
+        };
+        let scorer = OnnxScorer::load(&format!("{}/model.onnx", model_dir), 
+                                      &format!("{}/tokenizer.json", model_dir))?;
+        Compressor::new(Box::new(scorer), &args.target_model)?
+    } else {
+        let scorer = HeuristicScorer::new();
+        Compressor::new(Box::new(scorer), &args.target_model)?
+    };
 
     let settings = CompressionSettings {
         aggressiveness: args.aggressiveness,
