@@ -1,7 +1,7 @@
 # prompt-compress
 
-[![Release](https://img.shields.io/github/v/release/DevvGwardo/prompt-compress?label=release)](https://github.com/DevvGwardo/prompt-compress/releases)
-[![License](https://img.shields.io/github/license/DevvGwardo/prompt-compress)](LICENSE)
+[![Release](https://img.shields.io/badge/release-model--v0.1.0-blue)](https://github.com/DevvGwardo/prompt-compress/releases/tag/model-v0.1.0)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org/)
 
 Prompt compression for LLM systems, built in Rust.
