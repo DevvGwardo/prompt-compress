@@ -1,7 +1,10 @@
 /target
 *.onnx
 *.onnx.data
-models/*.onnx
+!models/*.onnx
+models/onnx_raw/
+models/onnx_optimized/
+models/onnx_quantized/
 training/output/
 training/__pycache__/
 .env

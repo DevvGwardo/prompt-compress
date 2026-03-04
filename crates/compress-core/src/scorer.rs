@@ -72,7 +72,7 @@ impl HeuristicScorer {
         }
 
         // Capitalized words (potential proper nouns, acronyms) are more important
-        if word.chars().next().map_or(false, |c| c.is_uppercase()) {
+        if word.chars().next().is_some_and(|c| c.is_uppercase()) {
             return 0.9;
         }
 

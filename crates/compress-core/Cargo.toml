@@ -11,9 +11,15 @@ thiserror.workspace = true
 tracing.workspace = true
 tiktoken-rs = "0.9"
 tokenizers = { version = "0.22", default-features = false, features = ["onig"] }
-ort = { version = "2.0.0-rc.11", default-features = false, features = ["ndarray"] }
-ndarray = "0.16"
+ort = { version = "2.0.0-rc.11", default-features = false, features = ["std", "ndarray", "download-binaries", "tls-native"] }
+ndarray = "0.17"
 regex = "1"
+dirs = { version = "5", optional = true }
+reqwest = { version = "0.12", features = ["rustls-tls"], optional = true }
+
+[features]
+default = []
+download = ["dep:dirs", "dep:reqwest"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }
