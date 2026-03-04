@@ -16,6 +16,7 @@ The prompt optimization layer for LLM apps.
 - [Scoring Modes](#scoring-modes)
 - [Codex Integration (Auto-Compress Prompts)](#codex-integration-auto-compress-prompts)
 - [OpenClaw Integration (Plugin)](#openclaw-integration-plugin)
+- [Wiki Publishing](#wiki-publishing)
 - [CLI](#cli)
 - [API](#api)
 - [Real Benchmark](#real-benchmark)
@@ -159,6 +160,22 @@ Notes:
 - Requires an OpenClaw build that supports `before_prompt_build.promptOverride`.
 - The plugin fails open: if compression fails, OpenClaw uses the original prompt.
 - Full integration docs: `integrations/openclaw/prompt-compress/README.md`.
+
+## Wiki Publishing
+
+Wiki source pages are tracked in-repo under:
+
+- `wiki/`
+
+Publish script:
+
+```bash
+./scripts/publish-wiki.sh
+```
+
+If GitHub wiki git remote is not initialized yet, create the first wiki page once in the browser:
+
+- https://github.com/DevvGwardo/prompt-compress/wiki
 
 ## CLI
 
@@ -307,6 +324,7 @@ prompt-compress/
 ├── integrations/
 │   └── openclaw/
 │       └── prompt-compress/
+├── wiki/
 ├── scripts/
 │   └── codex-compress
 ├── training/
