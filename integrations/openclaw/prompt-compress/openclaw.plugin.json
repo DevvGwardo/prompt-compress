@@ -1,0 +1,85 @@
+{
+  "id": "prompt-compress",
+  "name": "Prompt Compress",
+  "description": "Compresses prompts before model execution using the prompt-compress CLI.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "command": {
+        "type": "string"
+      },
+      "args": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "aggressiveness": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1
+      },
+      "targetModel": {
+        "type": "string"
+      },
+      "useOnnx": {
+        "type": "boolean"
+      },
+      "modelDir": {
+        "type": "string"
+      },
+      "minChars": {
+        "type": "number",
+        "minimum": 1
+      },
+      "timeoutMs": {
+        "type": "number",
+        "minimum": 100
+      },
+      "onlyIfSmaller": {
+        "type": "boolean"
+      },
+      "env": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "command": {
+      "label": "Compressor Command",
+      "help": "CLI command to execute (default: PROMPT_COMPRESS_BIN env var, then 'compress')."
+    },
+    "aggressiveness": {
+      "label": "Aggressiveness",
+      "help": "Compression strength between 0.0 and 1.0 (default: 0.4)."
+    },
+    "targetModel": {
+      "label": "Target Model",
+      "help": "Tokenizer model id used for token accounting (default: gpt-4)."
+    },
+    "useOnnx": {
+      "label": "Use ONNX",
+      "help": "Enable ONNX scoring mode for prompt compression."
+    },
+    "modelDir": {
+      "label": "Model Directory",
+      "help": "Directory containing model.onnx and tokenizer.json when ONNX mode is enabled."
+    },
+    "minChars": {
+      "label": "Minimum Prompt Length",
+      "help": "Skip compression for prompts shorter than this many characters (default: 80)."
+    },
+    "timeoutMs": {
+      "label": "Timeout (ms)",
+      "help": "Max time to wait for compressor CLI per prompt (default: 2000)."
+    },
+    "onlyIfSmaller": {
+      "label": "Only If Smaller",
+      "help": "Only apply replacement when compressed token count is lower than original."
+    }
+  }
+}

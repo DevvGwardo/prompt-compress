@@ -1,10 +1,10 @@
-# prompt-compress
+# PromptCompress
 
 [![Release](https://img.shields.io/badge/release-model--v0.1.0-blue)](https://github.com/DevvGwardo/prompt-compress/releases/tag/model-v0.1.0)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org/)
 
-Prompt compression for LLM systems, built in Rust.
+The prompt optimization layer for LLM apps.
 
 `prompt-compress` removes low-signal words before an LLM call while preserving intent and protected content. It gives you explicit token metrics so you can track cost and latency impact in production.
 
@@ -15,6 +15,7 @@ Prompt compression for LLM systems, built in Rust.
 - [How It Works](#how-it-works)
 - [Scoring Modes](#scoring-modes)
 - [Codex Integration (Auto-Compress Prompts)](#codex-integration-auto-compress-prompts)
+- [OpenClaw Integration (Plugin)](#openclaw-integration-plugin)
 - [CLI](#cli)
 - [API](#api)
 - [Real Benchmark](#real-benchmark)
@@ -30,6 +31,7 @@ Prompt compression for LLM systems, built in Rust.
 - `compress`: CLI for pipelines and local usage
 - `compress-api`: HTTP service for centralized compression
 - `scripts/codex-compress`: wrapper that compresses prompts before calling Codex
+- `integrations/openclaw/prompt-compress`: OpenClaw plugin that applies compression at `before_prompt_build`
 
 ## Quick Start (60s)
 
@@ -114,6 +116,49 @@ Optional alias:
 ```bash
 alias codexp="$PWD/scripts/codex-compress"
 ```
+
+## OpenClaw Integration (Plugin)
+
+This repo includes a ready-to-install OpenClaw plugin package at:
+
+`integrations/openclaw/prompt-compress`
+
+Install and enable:
+
+```bash
+openclaw plugins install /absolute/path/to/prompt-compress/integrations/openclaw/prompt-compress
+openclaw plugins enable prompt-compress
+```
+
+Recommended plugin config:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "prompt-compress": {
+        "enabled": true,
+        "config": {
+          "command": "/absolute/path/to/prompt-compress/target/release/compress",
+          "aggressiveness": 0.4,
+          "targetModel": "gpt-4",
+          "useOnnx": false,
+          "modelDir": "/absolute/path/to/prompt-compress/models",
+          "minChars": 80,
+          "timeoutMs": 2000,
+          "onlyIfSmaller": true
+        }
+      }
+    }
+  }
+}
+```
+
+Notes:
+
+- Requires an OpenClaw build that supports `before_prompt_build.promptOverride`.
+- The plugin fails open: if compression fails, OpenClaw uses the original prompt.
+- Full integration docs: `integrations/openclaw/prompt-compress/README.md`.
 
 ## CLI
 
@@ -259,6 +304,9 @@ prompt-compress/
 │   ├── compress-core/
 │   ├── compress-cli/
 │   └── compress-api/
+├── integrations/
+│   └── openclaw/
+│       └── prompt-compress/
 ├── scripts/
 │   └── codex-compress
 ├── training/
