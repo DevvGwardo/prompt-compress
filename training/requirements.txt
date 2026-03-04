@@ -1,0 +1,10 @@
+torch>=2.0
+transformers>=4.36
+datasets>=2.16
+onnx>=1.15
+onnxruntime>=1.17
+optimum>=1.17
+scikit-learn>=1.4
+numpy>=1.26
+tqdm
+anthropic>=0.18

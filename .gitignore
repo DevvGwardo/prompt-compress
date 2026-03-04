@@ -1,0 +1,7 @@
+/target
+*.onnx
+*.onnx.data
+models/*.onnx
+training/output/
+training/__pycache__/
+.env
