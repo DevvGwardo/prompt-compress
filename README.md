@@ -1,12 +1,50 @@
 # prompt-compress
 
-Token-level prompt compression for LLM workloads, implemented in Rust.
+Production-ready prompt compression for LLM apps, agents, and APIs.
 
-`prompt-compress` removes low-value words from prompts while preserving intent and tracking token savings. It ships as:
+`prompt-compress` removes low-value words while preserving intent, protected content, and measurable token savings.
+
+It ships as:
 
 - `compress-core`: reusable Rust library
 - `compress`: CLI for local and pipeline use
 - `compress-api`: HTTP API for service deployments
+
+## How It Works (30 Seconds)
+
+1. Parse input text and extract `<ttc_safe>...</ttc_safe>` regions.
+2. Score each token with either:
+   - `HeuristicScorer` for fast, dependency-light compression
+   - `OnnxScorer` for ML-based semantic scoring
+3. Keep tokens at or above the `aggressiveness` threshold.
+4. Reconstruct compressed text while preserving protected regions.
+5. Return compressed output plus token metrics (`output_tokens`, ratio, savings).
+
+```text
+Input -> Safe-tag extraction -> Token scoring -> Threshold filter -> Rebuild text -> Token stats
+```
+
+## Why Teams Use It
+
+- Reduce token cost and latency before every LLM call
+- Protect critical text (`IDs`, code fragments, policy text) with safe tags
+- Keep integration simple with a library, CLI, or REST API
+
+## Quick Example
+
+```bash
+echo "Please summarize the following document for me in a concise format" \
+  | ./target/release/compress -a 0.5 --stats
+```
+
+```text
+summarize following document concise format
+---
+Original tokens:    13
+Compressed tokens:  5
+Compression ratio:  38.5%
+Tokens saved:       8
+```
 
 ## Highlights
 
