@@ -1,0 +1,179 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Compress prompts before sending them to Codex.
+
+Usage:
+  codex-compress [wrapper-options] -- [codex-args...]
+  codex-compress [wrapper-options] [codex-args...]
+
+Prompt sources (priority):
+  1) --prompt "..."
+  2) stdin (if piped)
+
+Wrapper options:
+  --prompt TEXT              Prompt text to compress
+  --aggressiveness FLOAT     Compression aggressiveness (default: 0.5)
+  --target-model MODEL       Token counter target model (default: gpt-4)
+  --onnx                     Use ONNX scorer
+  --model-dir PATH           ONNX model directory
+  --stats                    Print compression stats to stderr
+  -h, --help                 Show help
+
+Environment defaults:
+  PROMPT_COMPRESS_AGGRESSIVENESS
+  PROMPT_COMPRESS_TARGET_MODEL
+  PROMPT_COMPRESS_USE_ONNX      (1/true/yes to enable)
+  PROMPT_COMPRESS_MODEL          (used by compress --model-dir and ONNX auto-discovery)
+  PROMPT_COMPRESS_BIN            (path to prompt-compress binary)
+EOF
+}
+
+to_bool() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+AGGRESSIVENESS="${PROMPT_COMPRESS_AGGRESSIVENESS:-0.5}"
+TARGET_MODEL="${PROMPT_COMPRESS_TARGET_MODEL:-gpt-4}"
+USE_ONNX=0
+MODEL_DIR="${PROMPT_COMPRESS_MODEL:-}"
+SHOW_STATS=0
+PROMPT=""
+
+if to_bool "${PROMPT_COMPRESS_USE_ONNX:-0}"; then
+  USE_ONNX=1
+fi
+
+# Parse wrapper options. Everything else is forwarded as codex args.
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --prompt)
+      [[ $# -ge 2 ]] || { echo "error: --prompt requires a value" >&2; exit 2; }
+      PROMPT="$2"
+      shift 2
+      ;;
+    --aggressiveness)
+      [[ $# -ge 2 ]] || { echo "error: --aggressiveness requires a value" >&2; exit 2; }
+      AGGRESSIVENESS="$2"
+      shift 2
+      ;;
+    --target-model)
+      [[ $# -ge 2 ]] || { echo "error: --target-model requires a value" >&2; exit 2; }
+      TARGET_MODEL="$2"
+      shift 2
+      ;;
+    --onnx)
+      USE_ONNX=1
+      shift
+      ;;
+    --model-dir)
+      [[ $# -ge 2 ]] || { echo "error: --model-dir requires a value" >&2; exit 2; }
+      MODEL_DIR="$2"
+      shift 2
+      ;;
+    --stats)
+      SHOW_STATS=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      break
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+CODEX_ARGS=("$@")
+
+# Resolve prompt from stdin when available.
+if [[ -z "$PROMPT" ]]; then
+  if [[ ! -t 0 ]]; then
+    PROMPT="$(cat)"
+  fi
+fi
+
+# If no prompt, run codex unchanged.
+if [[ -z "${PROMPT//[[:space:]]/}" ]]; then
+  exec codex "${CODEX_ARGS[@]}"
+fi
+
+resolve_compress_cmd() {
+  local script_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+  if [[ -n "${PROMPT_COMPRESS_BIN:-}" ]]; then
+    if [[ -x "${PROMPT_COMPRESS_BIN}" ]]; then
+      echo "${PROMPT_COMPRESS_BIN}"
+      return 0
+    fi
+    echo "error: PROMPT_COMPRESS_BIN is set but not executable: ${PROMPT_COMPRESS_BIN}" >&2
+    exit 1
+  fi
+
+  if [[ -x "./target/release/compress" ]]; then
+    echo "./target/release/compress"
+    return 0
+  fi
+
+  if [[ -x "${script_dir}/../target/release/compress" ]]; then
+    echo "${script_dir}/../target/release/compress"
+    return 0
+  fi
+
+  if command -v compress >/dev/null 2>&1; then
+    local candidate
+    candidate="$(command -v compress)"
+    if "$candidate" --help 2>&1 | grep -q "LLM prompt compression tool"; then
+      echo "$candidate"
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
+COMPRESS_BIN="$(resolve_compress_cmd || true)"
+if [[ -z "$COMPRESS_BIN" ]]; then
+  echo "error: compress binary not found. Build first with: cargo build --release" >&2
+  exit 1
+fi
+
+compress_cmd=(
+  "$COMPRESS_BIN"
+  -i "$PROMPT"
+  -a "$AGGRESSIVENESS"
+  -m "$TARGET_MODEL"
+  --format text
+)
+
+if (( USE_ONNX )); then
+  compress_cmd+=(--onnx)
+fi
+
+if [[ -n "$MODEL_DIR" ]]; then
+  compress_cmd+=(--model-dir "$MODEL_DIR")
+fi
+
+if (( SHOW_STATS )); then
+  compress_cmd+=(--stats)
+fi
+
+COMPRESSED_PROMPT="$("${compress_cmd[@]}")"
+
+if [[ -z "${COMPRESSED_PROMPT//[[:space:]]/}" ]]; then
+  echo "error: compressed prompt is empty; aborting" >&2
+  exit 1
+fi
+
+exec codex "${CODEX_ARGS[@]}" "$COMPRESSED_PROMPT"

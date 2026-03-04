@@ -46,6 +46,53 @@ Compression ratio:  38.5%
 Tokens saved:       8
 ```
 
+## Codex Integration
+
+Use the wrapper at `scripts/codex-compress` to automatically compress prompt text before it is sent to Codex.
+
+### 1) Build once
+
+```bash
+cargo build --release
+chmod +x scripts/codex-compress
+```
+
+### 2) Run with stdin (recommended)
+
+```bash
+echo "Review this Rust module for correctness and performance issues" \
+  | ./scripts/codex-compress -- exec --full-auto
+```
+
+### 3) Run with explicit prompt text
+
+```bash
+./scripts/codex-compress \
+  --prompt "Review this Rust module for correctness and performance issues" \
+  -- exec --full-auto
+```
+
+### 4) Optional defaults
+
+```bash
+export PROMPT_COMPRESS_AGGRESSIVENESS=0.4
+export PROMPT_COMPRESS_USE_ONNX=1
+export PROMPT_COMPRESS_MODEL="$PWD/models"
+export PROMPT_COMPRESS_BIN="$PWD/target/release/compress"
+```
+
+### 5) Optional shell alias
+
+```bash
+alias codexp="$PWD/scripts/codex-compress"
+```
+
+Then:
+
+```bash
+echo "Draft a migration plan for this repo" | codexp -- exec
+```
+
 ## Highlights
 
 - Pluggable scoring via `TokenScorer`:
