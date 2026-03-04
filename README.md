@@ -77,6 +77,59 @@ We sent a real code review prompt (227 tokens) through `compress` at different a
 
 > **Quality cliff:** At 0.7 aggressiveness (63% savings), Claude started hallucinating bugs that didn't exist in the original code — too much context was lost. **The sweet spot is 0.3–0.5** for code-related prompts.
 
+### Same Prompt Through Kimi (kimi-cli)
+
+We ran the identical prompt and compression levels through [Kimi](https://kimi.ai) to see how a different model handles compressed input.
+
+#### Compression Results
+
+| | Tokens | Ratio | Saved |
+|---|:---:|:---:|:---:|
+| **Original** | 172 | 100% | — |
+| **Compressed (0.3)** | 119 | 69% | **31% fewer tokens** |
+| **Compressed (0.7)** | 57 | 33% | **67% fewer tokens** |
+
+#### Quality Comparison
+
+<table>
+<tr><th></th><th>Original (172 tokens)</th><th>Compressed @ 0.3 (119 tokens)</th><th>Compressed @ 0.7 (57 tokens)</th></tr>
+<tr>
+<td><strong>Issues Found</strong></td>
+<td>6 issues: range(len), wasted computation, no error handling, no null safety, verbose accumulation, missing type safety</td>
+<td>Misread compression as syntax errors — found 8 "critical syntax errors" (missing <code>=</code>, <code>for</code>, <code>if</code>, <code>in</code>) plus real issues</td>
+<td>Had to reconstruct the likely code from fragments — lost the review framing entirely</td>
+</tr>
+<tr>
+<td><strong>Fix Quality</strong></td>
+<td>.get() with defaults, f-strings, sum() generator, input validation, type hints, docstring</td>
+<td>Same fixes as original — still got .get(), f-strings, sum(), type hints — but prefaced with syntax error corrections</td>
+<td>Provided corrected code but rated its own improvements (9/10) instead of the original — misunderstood the ask</td>
+</tr>
+<tr>
+<td><strong>Rating Given</strong></td>
+<td>4/10 (with per-category breakdown)</td>
+<td>2/10 (penalized for "syntax errors" that were compression artifacts)</td>
+<td>9/10 (rated the improved code, not the original — confused by lost context)</td>
+</tr>
+<tr>
+<td><strong>Verdict</strong></td>
+<td>Thorough, accurate review</td>
+<td>Correct fixes but confused by compression artifacts</td>
+<td>Lost the task framing entirely</td>
+</tr>
+</table>
+
+#### Claude vs Kimi: Key Takeaways
+
+| | Claude (Opus 4.6) | Kimi |
+|---|---|---|
+| **Original prompt** | 5 issues, 6/10 rating | 6 issues, 4/10 rating |
+| **Compressed @ 0.3** | Equally good or better — found *more* issues, added scoring rubric | Misinterpreted compression artifacts as code syntax errors |
+| **Compressed @ 0.7** | Started hallucinating non-existent bugs | Lost the task framing, rated its own fixes instead |
+| **Compression tolerance** | Handles compressed text gracefully up to ~0.5 | Struggles with compressed text at all levels — treats missing words as broken code |
+
+> **Finding:** Claude handles compressed prompts significantly better than Kimi. Claude appears to "fill in the blanks" and infer intent from compressed text, while Kimi interprets the missing grammar literally. **If you're compressing prompts for Kimi, use very light compression (0.1–0.2) or protect the code block with `<ttc_safe>` tags.**
+
 ## Features
 
 - **Token-level importance scoring** with a `TokenScorer` trait — swap heuristic for ML with zero API changes
