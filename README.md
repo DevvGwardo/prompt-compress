@@ -30,6 +30,53 @@ Compression ratio:  50.0%
 Tokens saved:       8
 ```
 
+## Live Comparison: Original vs Compressed with Claude
+
+We sent a real code review prompt (227 tokens) through `compress` at different aggressiveness levels, then sent both original and compressed versions to Claude Opus 4.6 to compare output quality.
+
+### The Prompt
+
+> *"You are an expert software engineer. I need you to review the following code and provide specific, actionable feedback on how to improve it. Focus on performance, readability, and potential bugs..."* (full Python code review prompt with a `process_user_data` function)
+
+### Compression Results
+
+| | Tokens | Ratio | Saved |
+|---|:---:|:---:|:---:|
+| **Original** | 227 | 100% | — |
+| **Compressed (0.3)** | 156 | 69% | **31% fewer tokens** |
+| **Compressed (0.5)** | 156 | 69% | **31% fewer tokens** |
+| **Compressed (0.7)** | 83 | 37% | **63% fewer tokens** |
+
+### Quality Comparison
+
+<table>
+<tr><th></th><th>Original (227 tokens)</th><th>Compressed @ 0.3 (156 tokens)</th></tr>
+<tr>
+<td><strong>Issues Found</strong></td>
+<td>5 issues: range(len), no error handling, missing purchases key, string concat, could use comprehension</td>
+<td>6 issues: range(len), missing keys, no input validation, missing purchases, fragile name construction, no type hints</td>
+</tr>
+<tr>
+<td><strong>Fix Quality</strong></td>
+<td>List comprehension, .get() with defaults, f-string</td>
+<td>Early continue pattern, .get() with defaults, f-string, type hints, .strip() on names</td>
+</tr>
+<tr>
+<td><strong>Rating Given</strong></td>
+<td>6/10</td>
+<td>4/10 (with detailed rubric table)</td>
+</tr>
+<tr>
+<td><strong>Verdict</strong></td>
+<td>Solid review</td>
+<td>More thorough review — found more issues, provided a scoring rubric</td>
+</tr>
+</table>
+
+> **Result:** At 0.3 aggressiveness (31% token savings), Claude produced an **equally good or better** response. The compressed prompt preserved all semantic meaning while stripping grammatical filler.
+
+> **Quality cliff:** At 0.7 aggressiveness (63% savings), Claude started hallucinating bugs that didn't exist in the original code — too much context was lost. **The sweet spot is 0.3–0.5** for code-related prompts.
+
 ## Features
 
 - **Token-level importance scoring** with a `TokenScorer` trait — swap heuristic for ML with zero API changes
@@ -392,7 +439,7 @@ let compressor = Compressor::new(Box::new(scorer), "gpt-4")?;
 ## Testing
 
 ```bash
-# Run all tests (20 total: 15 unit + 5 integration)
+# Run all 128 tests
 cargo test
 
 # Core library only
@@ -400,17 +447,23 @@ cargo test -p compress-core
 
 # API integration tests only
 cargo test -p compress-api
+
+# CLI integration tests only
+cargo test -p compress-cli
 ```
 
 ### Test Coverage
 
 | Module | Tests | Covers |
 |---|---|---|
-| `scorer` | 4 | Stop words, capitalization, numbers, empty input |
-| `compressor` | 8 | No/basic/high compression, safe tags, edge cases |
-| `tokenizer` | 2 | Token counting, empty string |
-| `model` | 1 | Missing model file error |
-| `api` | 5 | Health check, compression, auth flow, error handling |
+| `scorer` | 22 | Stop words, punctuation, numbers, capitalization, ALL CAPS, length bonus, unicode, whitespace, mixed content ordering |
+| `compressor` | 32 | Aggressiveness spectrum (0.0–1.0), safe tags (nested/empty/multiple/removed), error handling, determinism, long input, unicode, reusability |
+| `config` | 10 | Default values, serde serialization/deserialization, JSON roundtripping, partial JSON defaults, Clone |
+| `error` | 9 | All error variant display messages, anyhow conversion, Send + Sync + Debug trait bounds |
+| `tokenizer` | 14 | Token counting, known counts, unicode, special characters, determinism, reusability, model names |
+| `model` | 4 | Missing model error, path in error message, fake file fallback, scorer fallback |
+| `api` | 21 | Schema validation, aggressiveness levels, safe tags, auth edge cases (empty bearer, Basic scheme), unicode, long input, sequential requests, error responses |
+| `cli` | 16 | All input modes (stdin/file/inline), JSON/text formats, --stats, aggressiveness, safe tags, error cases, --help, --version, target model |
 
 ## Roadmap
 
