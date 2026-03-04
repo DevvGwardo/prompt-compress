@@ -30,6 +30,12 @@ fi
 cp "$SOURCE_DIR"/*.md "$WORK_DIR"/
 
 cd "$WORK_DIR"
+# Some environments have Git LFS lock verification enabled globally, which can
+# break wiki pushes with:
+# "Authentication required: You must have push access to verify locks".
+# Disable lock verification for this wiki remote in the temp clone.
+git config "lfs.${WIKI_REMOTE}/info/lfs.locksverify" false || true
+
 if [[ -z "$(git status --porcelain)" ]]; then
   echo "No wiki changes to publish."
   exit 0
@@ -37,6 +43,18 @@ fi
 
 git add *.md
 git commit -m "Update wiki pages from repo source" >/dev/null
-git push origin master >/dev/null
+if ! GIT_LFS_SKIP_PUSH=1 git push origin master >/dev/null; then
+  cat >&2 <<MSG
+Wiki push failed.
+
+If you see an authentication/lock verification error, run:
+  gh auth login
+  gh auth setup-git
+
+Then retry:
+  ./scripts/publish-wiki.sh
+MSG
+  exit 1
+fi
 
 echo "Wiki published successfully."
