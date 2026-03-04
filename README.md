@@ -4,6 +4,22 @@ Prompt compression for LLM systems, built in Rust.
 
 `prompt-compress` removes low-signal words before an LLM call while preserving intent and protected content. It gives you explicit token metrics so you can track cost and latency impact in production.
 
+## Contents
+
+- [What You Get](#what-you-get)
+- [Quick Start (60s)](#quick-start-60s)
+- [How It Works](#how-it-works)
+- [Scoring Modes](#scoring-modes)
+- [Codex Integration (Auto-Compress Prompts)](#codex-integration-auto-compress-prompts)
+- [CLI](#cli)
+- [API](#api)
+- [Real Benchmark](#real-benchmark)
+- [Model Artifacts and Distribution](#model-artifacts-and-distribution)
+- [Training Pipeline](#training-pipeline)
+- [Development](#development)
+- [Repository Layout](#repository-layout)
+- [License](#license)
+
 ## What You Get
 
 - `compress-core`: embeddable Rust library
