@@ -246,7 +246,10 @@ How this works:
 
 ## Codex Integration
 
-Use the wrapper script to compress prompts before sending them to `codex`.
+Two Codex entrypoints are included:
+
+- `scripts/codex-compress`: one-shot wrapper that compresses an initial prompt before launching `codex`
+- `scripts/codex-proxy`: per-turn proxy launcher for interactive Codex sessions
 
 ```bash
 chmod +x scripts/codex-compress
@@ -275,6 +278,15 @@ Plain interactive launch (initial prompt compression):
 
 This prompts for one initial message, compresses it, then launches interactive `codex`.
 
+Per-turn interactive launch (recommended for ChatGPT-plan Codex auth):
+
+```bash
+./scripts/codex-proxy
+```
+
+This starts `compress-api` locally if needed, points Codex at the local proxy via
+`chatgpt_base_url`, and compresses user text blocks on every proxied turn.
+
 Recommended environment defaults:
 
 ```bash
@@ -287,18 +299,38 @@ export PROMPT_COMPRESS_CODEX_BIN="/absolute/path/to/real/codex"
 export PROMPT_COMPRESS_INTERACTIVE_FIRST_PROMPT=1
 ```
 
+Recommended per-turn proxy defaults:
+
+```bash
+export COMPRESS_PROXY_AGGRESSIVENESS=0.4
+export COMPRESS_PROXY_MIN_CHARS=0
+export COMPRESS_PROXY_ONLY_IF_SMALLER=1
+```
+
 Optional alias:
 
 ```bash
 alias codexp="$PWD/scripts/codex-compress"
-# or replace codex directly:
-alias codex="$PWD/scripts/codex-compress"
+alias codex-proxy="$PWD/scripts/codex-proxy"
+# or replace codex directly for per-turn compression:
+alias codex="$PWD/scripts/codex-proxy"
 ```
 
 Notes:
 
-- With interactive `codex`, this wrapper compresses the initial message only.
-- For per-request compression in a gateway workflow, use the OpenClaw plugin below.
+- `scripts/codex-compress` compresses the initial message only.
+- `scripts/codex-proxy` evaluates every non-empty prompt block and only rewrites when token count improves.
+- Per-request proxy logs include token savings, for example:
+
+```text
+proxy stats path=responses attempted_blocks=2 rewritten_blocks=1 tokens=128 -> 91 saved=37 ratio=28.9%
+```
+
+- View savings live with:
+
+```bash
+tail -f /tmp/prompt-compress-proxy.log
+```
 
 ## OpenClaw Integration
 

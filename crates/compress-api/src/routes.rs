@@ -2,7 +2,9 @@ use axum::{
     body::{to_bytes, Body},
     extract::{Path, Request, State},
     http::{
-        header::{AUTHORIZATION, CONNECTION, CONTENT_LENGTH, HOST, TRANSFER_ENCODING},
+        header::{
+            AUTHORIZATION, CONNECTION, CONTENT_ENCODING, CONTENT_LENGTH, HOST, TRANSFER_ENCODING,
+        },
         HeaderMap, StatusCode,
     },
     response::Response,
@@ -15,6 +17,35 @@ use compress_core::CompressionSettings;
 
 use crate::dto::{CompressRequest, CompressResponse, ErrorDetail, ErrorResponse};
 use crate::state::{AppState, ProxyConfig};
+
+#[derive(Default)]
+struct RewriteStats {
+    attempted_blocks: usize,
+    rewritten_blocks: usize,
+    original_tokens: usize,
+    output_tokens: usize,
+}
+
+impl RewriteStats {
+    fn record(&mut self, original_tokens: usize, output_tokens: usize, rewritten: bool) {
+        self.attempted_blocks += 1;
+        self.original_tokens += original_tokens;
+        self.output_tokens += output_tokens;
+        if rewritten {
+            self.rewritten_blocks += 1;
+        }
+    }
+
+    fn saved_tokens(&self) -> usize {
+        self.original_tokens.saturating_sub(self.output_tokens)
+    }
+}
+
+struct CompressionAttempt {
+    output: String,
+    output_tokens: usize,
+    original_input_tokens: usize,
+}
 
 fn bad_request(message: impl Into<String>) -> (StatusCode, Json<ErrorResponse>) {
     (
@@ -69,8 +100,8 @@ pub async fn compress(
     }
 }
 
-fn compress_text(state: &AppState, cfg: &ProxyConfig, text: &str) -> Option<String> {
-    if text.trim().is_empty() || text.len() < cfg.min_chars {
+fn compress_text(state: &AppState, cfg: &ProxyConfig, text: &str) -> Option<CompressionAttempt> {
+    if text.trim().is_empty() {
         return None;
     }
 
@@ -80,15 +111,11 @@ fn compress_text(state: &AppState, cfg: &ProxyConfig, text: &str) -> Option<Stri
     };
 
     match state.compressor.compress(text, &settings) {
-        Ok(result) => {
-            if cfg.only_if_smaller && result.output_tokens >= result.original_input_tokens {
-                return None;
-            }
-            if result.output.trim().is_empty() || result.output == text {
-                return None;
-            }
-            Some(result.output)
-        }
+        Ok(result) => Some(CompressionAttempt {
+            output: result.output,
+            output_tokens: result.output_tokens,
+            original_input_tokens: result.original_input_tokens,
+        }),
         Err(err) => {
             tracing::warn!("proxy compression skipped due to error: {}", err);
             None
@@ -96,14 +123,24 @@ fn compress_text(state: &AppState, cfg: &ProxyConfig, text: &str) -> Option<Stri
     }
 }
 
+fn should_rewrite_text(cfg: &ProxyConfig, original: &str, attempt: &CompressionAttempt) -> bool {
+    if original.len() < cfg.min_chars {
+        return false;
+    }
+    if cfg.only_if_smaller && attempt.output_tokens >= attempt.original_input_tokens {
+        return false;
+    }
+    !attempt.output.trim().is_empty() && attempt.output != original
+}
+
 fn compress_chat_completions_payload(
     state: &AppState,
     cfg: &ProxyConfig,
     payload: &mut Value,
-) -> usize {
-    let mut rewritten = 0usize;
+) -> RewriteStats {
+    let mut stats = RewriteStats::default();
     let Some(messages) = payload.get_mut("messages").and_then(Value::as_array_mut) else {
-        return rewritten;
+        return stats;
     };
 
     for message in messages {
@@ -118,9 +155,16 @@ fn compress_chat_completions_payload(
 
         if let Some(content) = obj.get_mut("content") {
             if let Some(text) = content.as_str() {
-                if let Some(compressed) = compress_text(state, cfg, text) {
-                    *content = Value::String(compressed);
-                    rewritten += 1;
+                if let Some(attempt) = compress_text(state, cfg, text) {
+                    let rewritten = should_rewrite_text(cfg, text, &attempt);
+                    stats.record(
+                        attempt.original_input_tokens,
+                        attempt.output_tokens,
+                        rewritten,
+                    );
+                    if rewritten {
+                        *content = Value::String(attempt.output);
+                    }
                 }
                 continue;
             }
@@ -139,9 +183,16 @@ fn compress_chat_completions_payload(
                     }
                     if let Some(text_val) = part_obj.get_mut("text") {
                         if let Some(text) = text_val.as_str() {
-                            if let Some(compressed) = compress_text(state, cfg, text) {
-                                *text_val = Value::String(compressed);
-                                rewritten += 1;
+                            if let Some(attempt) = compress_text(state, cfg, text) {
+                                let rewritten = should_rewrite_text(cfg, text, &attempt);
+                                stats.record(
+                                    attempt.original_input_tokens,
+                                    attempt.output_tokens,
+                                    rewritten,
+                                );
+                                if rewritten {
+                                    *text_val = Value::String(attempt.output);
+                                }
                             }
                         }
                     }
@@ -150,19 +201,30 @@ fn compress_chat_completions_payload(
         }
     }
 
-    rewritten
+    stats
 }
 
-fn compress_responses_payload(state: &AppState, cfg: &ProxyConfig, payload: &mut Value) -> usize {
-    let mut rewritten = 0usize;
+fn compress_responses_payload(
+    state: &AppState,
+    cfg: &ProxyConfig,
+    payload: &mut Value,
+) -> RewriteStats {
+    let mut stats = RewriteStats::default();
 
     if let Some(input) = payload.get_mut("input") {
         if let Some(text) = input.as_str() {
-            if let Some(compressed) = compress_text(state, cfg, text) {
-                *input = Value::String(compressed);
-                rewritten += 1;
+            if let Some(attempt) = compress_text(state, cfg, text) {
+                let rewritten = should_rewrite_text(cfg, text, &attempt);
+                stats.record(
+                    attempt.original_input_tokens,
+                    attempt.output_tokens,
+                    rewritten,
+                );
+                if rewritten {
+                    *input = Value::String(attempt.output);
+                }
             }
-            return rewritten;
+            return stats;
         }
 
         if let Some(items) = input.as_array_mut() {
@@ -177,9 +239,16 @@ fn compress_responses_payload(state: &AppState, cfg: &ProxyConfig, payload: &mut
                 if item_type == "input_text" {
                     if let Some(text_val) = obj.get_mut("text") {
                         if let Some(text) = text_val.as_str() {
-                            if let Some(compressed) = compress_text(state, cfg, text) {
-                                *text_val = Value::String(compressed);
-                                rewritten += 1;
+                            if let Some(attempt) = compress_text(state, cfg, text) {
+                                let rewritten = should_rewrite_text(cfg, text, &attempt);
+                                stats.record(
+                                    attempt.original_input_tokens,
+                                    attempt.output_tokens,
+                                    rewritten,
+                                );
+                                if rewritten {
+                                    *text_val = Value::String(attempt.output);
+                                }
                             }
                         }
                     }
@@ -192,9 +261,16 @@ fn compress_responses_payload(state: &AppState, cfg: &ProxyConfig, payload: &mut
 
                 if let Some(content) = obj.get_mut("content") {
                     if let Some(text) = content.as_str() {
-                        if let Some(compressed) = compress_text(state, cfg, text) {
-                            *content = Value::String(compressed);
-                            rewritten += 1;
+                        if let Some(attempt) = compress_text(state, cfg, text) {
+                            let rewritten = should_rewrite_text(cfg, text, &attempt);
+                            stats.record(
+                                attempt.original_input_tokens,
+                                attempt.output_tokens,
+                                rewritten,
+                            );
+                            if rewritten {
+                                *content = Value::String(attempt.output);
+                            }
                         }
                         continue;
                     }
@@ -214,9 +290,16 @@ fn compress_responses_payload(state: &AppState, cfg: &ProxyConfig, payload: &mut
 
                             if let Some(text_val) = part_obj.get_mut("text") {
                                 if let Some(text) = text_val.as_str() {
-                                    if let Some(compressed) = compress_text(state, cfg, text) {
-                                        *text_val = Value::String(compressed);
-                                        rewritten += 1;
+                                    if let Some(attempt) = compress_text(state, cfg, text) {
+                                        let rewritten = should_rewrite_text(cfg, text, &attempt);
+                                        stats.record(
+                                            attempt.original_input_tokens,
+                                            attempt.output_tokens,
+                                            rewritten,
+                                        );
+                                        if rewritten {
+                                            *text_val = Value::String(attempt.output);
+                                        }
                                     }
                                 }
                             }
@@ -227,27 +310,40 @@ fn compress_responses_payload(state: &AppState, cfg: &ProxyConfig, payload: &mut
         }
     }
 
-    rewritten
+    stats
 }
 
 fn rewrite_proxy_payload(state: &AppState, path: &str, body: &[u8]) -> Option<Vec<u8>> {
     let cfg = state.proxy.as_ref()?;
     let mut payload: Value = serde_json::from_slice(body).ok()?;
-    let rewritten = match path {
+    let stats = match path {
         "chat/completions" => compress_chat_completions_payload(state, cfg, &mut payload),
         "responses" => compress_responses_payload(state, cfg, &mut payload),
-        _ => 0,
+        _ => RewriteStats::default(),
     };
 
-    if rewritten == 0 {
+    if stats.attempted_blocks == 0 {
         return None;
     }
 
     tracing::info!(
-        "proxy compressed {} request text block(s) for path {}",
-        rewritten,
-        path
+        "proxy stats path={} attempted_blocks={} rewritten_blocks={} tokens={} -> {} saved={} ratio={:.1}%",
+        path,
+        stats.attempted_blocks,
+        stats.rewritten_blocks,
+        stats.original_tokens,
+        stats.output_tokens,
+        stats.saved_tokens(),
+        if stats.original_tokens == 0 {
+            0.0
+        } else {
+            100.0 * (stats.saved_tokens() as f64) / (stats.original_tokens as f64)
+        }
     );
+    if stats.rewritten_blocks == 0 {
+        return None;
+    }
+
     serde_json::to_vec(&payload).ok()
 }
 
@@ -262,7 +358,11 @@ fn should_rewrite_json(headers: &HeaderMap) -> bool {
 fn sanitize_proxy_headers(headers: &HeaderMap, has_upstream_api_key: bool) -> HeaderMap {
     let mut sanitized = HeaderMap::new();
     for (name, value) in headers {
-        if name == HOST || name == CONTENT_LENGTH || name == CONNECTION {
+        if name == HOST
+            || name == CONTENT_LENGTH
+            || name == CONNECTION
+            || name == CONTENT_ENCODING
+        {
             continue;
         }
         if has_upstream_api_key && name == AUTHORIZATION {
@@ -286,6 +386,7 @@ pub async fn proxy(
     };
 
     let method = req.method().clone();
+    let uri = req.uri().clone();
     let headers = req.headers().clone();
     let body = to_bytes(req.into_body(), 50 * 1024 * 1024)
         .await
@@ -299,11 +400,15 @@ pub async fn proxy(
     }
 
     let path = path.trim_start_matches('/');
-    let upstream_url = format!(
+    let mut upstream_url = format!(
         "{}/{}",
         proxy_cfg.upstream_base_url.trim_end_matches('/'),
         path
     );
+    if let Some(query) = uri.query() {
+        upstream_url.push('?');
+        upstream_url.push_str(query);
+    }
 
     let method = reqwest::Method::from_bytes(method.as_str().as_bytes()).map_err(|e| {
         bad_request(format!(
