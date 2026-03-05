@@ -4,45 +4,37 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org/)
 
-The prompt optimization layer for LLM apps.
+`prompt-compress` is a Rust toolkit for reducing prompt token count before LLM calls while preserving critical content.
 
-`prompt-compress` removes low-signal words before an LLM call while preserving intent and protected content. It gives you explicit token metrics so you can track cost and latency impact in production.
+It includes:
 
-## Contents
+- `compress-core`: embeddable library
+- `compress` (CLI): local and pipeline usage
+- `compress-api`: HTTP service
+- `scripts/codex-compress`: Codex wrapper with pre-send compression
+- `integrations/openclaw/prompt-compress`: OpenClaw plugin package
 
-- [What You Get](#what-you-get)
-- [Quick Start (60s)](#quick-start-60s)
-- [How It Works](#how-it-works)
-- [Scoring Modes](#scoring-modes)
-- [Codex Integration (Auto-Compress Prompts)](#codex-integration-auto-compress-prompts)
-- [OpenClaw Integration (Plugin)](#openclaw-integration-plugin)
-- [Wiki Publishing](#wiki-publishing)
-- [CLI](#cli)
-- [API](#api)
-- [Real Benchmark](#real-benchmark)
-- [Model Artifacts and Distribution](#model-artifacts-and-distribution)
-- [Training Pipeline](#training-pipeline)
-- [Development](#development)
-- [Repository Layout](#repository-layout)
-- [License](#license)
+## Why Use It
 
-## What You Get
+- Lower input token volume and cost
+- Keep important terms protected via `<ttc_safe>...</ttc_safe>`
+- Choose fast heuristic scoring or ONNX scoring
+- Get explicit token metrics for observability
+- Deploy as library, CLI, or API
 
-- `compress-core`: embeddable Rust library
-- `compress`: CLI for pipelines and local usage
-- `compress-api`: HTTP service for centralized compression
-- `scripts/codex-compress`: wrapper that compresses prompts before calling Codex
-- `integrations/openclaw/prompt-compress`: OpenClaw plugin that applies compression at `before_prompt_build`
+## Quick Start
 
-## Quick Start (60s)
+Build binaries:
 
 ```bash
 cargo build --release
 ```
 
+Run compression from stdin:
+
 ```bash
 echo "Please summarize the following document in concise bullet points" \
-  | ./target/release/compress -a 0.5 --stats
+  | ./target/release/compress --aggressiveness 0.5 --stats
 ```
 
 Example output:
@@ -56,46 +48,122 @@ Compression ratio:  54.5%
 Tokens saved:       5
 ```
 
-## How It Works
+## Architecture
 
 ```text
-Input text
+input text
   -> extract <ttc_safe> regions
   -> score tokens (HeuristicScorer or OnnxScorer)
   -> keep tokens above aggressiveness threshold
   -> rebuild output text
-  -> count tokens + return savings metrics
+  -> report token savings
 ```
 
-Rules:
+Compression rules:
 
 - `aggressiveness=0.0`: no compression
 - `aggressiveness=1.0`: strongest filtering
-- `<ttc_safe>...</ttc_safe>`: always preserved
+- `<ttc_safe>...</ttc_safe>` content is preserved
 
 ## Scoring Modes
 
-| Mode | Startup | Throughput | Typical Use |
+| Mode | Startup Cost | Throughput | Typical Use |
 |---|---:|---:|---|
-| Heuristic | very low | very high | default production baseline |
-| ONNX | higher | lower | semantic scoring experiments / quality tuning |
+| Heuristic | Very low | Very high | Default production baseline |
+| ONNX | Higher | Lower | Semantic scoring experiments and tuning |
 
-## Codex Integration (Auto-Compress Prompts)
+## CLI
 
-Use the wrapper script so your prompt is compressed before `codex` runs.
+Command:
+
+```text
+compress [OPTIONS]
+```
+
+Key options:
+
+- `-i, --input <TEXT>`: direct input
+- `-f, --file <PATH>`: read prompt from file
+- `-a, --aggressiveness <FLOAT>`: `0.0..1.0` (default `0.5`)
+- `-m, --target-model <MODEL>`: tokenizer model (default `gpt-4`)
+- `--onnx`: use ONNX scorer
+- `--model-dir <PATH>`: ONNX model directory (or `PROMPT_COMPRESS_MODEL`)
+- `-s, --stats`: print token stats to stderr
+- `--format <text|json>`: output format (default `text`)
+
+Input precedence: `--input` > `--file` > stdin.
+
+JSON output example:
+
+```bash
+echo "Analyze this codebase for correctness risks" \
+  | ./target/release/compress --format json
+```
+
+## API
+
+Start server:
+
+```bash
+cargo run --release -p compress-api
+```
+
+Enable bearer auth:
+
+```bash
+COMPRESS_API_KEY=sk-your-secret cargo run --release -p compress-api
+```
+
+Endpoints:
+
+- `POST /v1/compress`
+- `GET /health`
+
+Request example:
+
+```bash
+curl -s -X POST http://localhost:3000/v1/compress \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-your-secret" \
+  -d '{
+    "model": "scorer-v0.1",
+    "input": "The quick brown fox jumps over the lazy dog",
+    "compression_settings": {
+      "aggressiveness": 0.5,
+      "target_model": "gpt-4"
+    }
+  }'
+```
+
+Response example:
+
+```json
+{
+  "output": "quick brown fox jumps lazy dog",
+  "output_tokens": 6,
+  "original_input_tokens": 9,
+  "compression_ratio": 0.6666666666666666
+}
+```
+
+Note: `model` is currently accepted for compatibility but does not yet select scorer mode in `compress-api`.
+
+## Codex Integration
+
+Use the wrapper script to compress prompts before sending them to `codex`.
 
 ```bash
 chmod +x scripts/codex-compress
 ```
 
-Stdin workflow:
+Stdin flow:
 
 ```bash
 echo "Review this Rust module for correctness and performance issues" \
   | ./scripts/codex-compress -- exec --full-auto
 ```
 
-Explicit prompt workflow:
+Explicit prompt flow:
 
 ```bash
 ./scripts/codex-compress \
@@ -103,7 +171,7 @@ Explicit prompt workflow:
   -- exec
 ```
 
-Recommended defaults:
+Recommended environment defaults:
 
 ```bash
 export PROMPT_COMPRESS_AGGRESSIVENESS=0.4
@@ -118,9 +186,9 @@ Optional alias:
 alias codexp="$PWD/scripts/codex-compress"
 ```
 
-## OpenClaw Integration (Plugin)
+## OpenClaw Integration
 
-This repo includes a ready-to-install OpenClaw plugin package at:
+Plugin package location:
 
 `integrations/openclaw/prompt-compress`
 
@@ -155,96 +223,15 @@ Recommended plugin config:
 }
 ```
 
-Notes:
+Integration notes:
 
-- Requires an OpenClaw build that supports `before_prompt_build.promptOverride`.
-- The plugin fails open: if compression fails, OpenClaw uses the original prompt.
-- Full integration docs: `integrations/openclaw/prompt-compress/README.md`.
+- Requires OpenClaw support for `before_prompt_build.promptOverride`
+- Plugin fails open (original prompt is used if compression fails)
+- See `integrations/openclaw/prompt-compress/README.md` for integration detail
 
-## Wiki Publishing
+## Performance
 
-Wiki source pages are tracked in-repo under:
-
-- `wiki/`
-
-Publish script:
-
-```bash
-./scripts/publish-wiki.sh
-```
-
-If GitHub wiki git remote is not initialized yet, create the first wiki page once in the browser:
-
-- https://github.com/DevvGwardo/prompt-compress/wiki
-
-## CLI
-
-```text
-compress [OPTIONS]
-
--i, --input <TEXT>
--f, --file <PATH>
--a, --aggressiveness <FLOAT>      default: 0.5
--m, --target-model <MODEL>        default: gpt-4
-    --onnx
-    --model-dir <PATH>            or PROMPT_COMPRESS_MODEL
--s, --stats
-    --format <text|json>          default: text
-```
-
-Input precedence: `--input` > `--file` > stdin.
-
-## API
-
-Start server:
-
-```bash
-cargo run --release -p compress-api
-```
-
-With auth:
-
-```bash
-COMPRESS_API_KEY=sk-your-secret cargo run --release -p compress-api
-```
-
-Endpoints:
-
-- `POST /v1/compress`
-- `GET /health`
-
-Request:
-
-```bash
-curl -s -X POST http://localhost:3000/v1/compress \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-your-secret" \
-  -d '{
-    "model": "scorer-v0.1",
-    "input": "The quick brown fox jumps over the lazy dog",
-    "compression_settings": {
-      "aggressiveness": 0.5,
-      "target_model": "gpt-4"
-    }
-  }'
-```
-
-Response:
-
-```json
-{
-  "output": "quick brown fox jumps lazy dog",
-  "output_tokens": 6,
-  "original_input_tokens": 9,
-  "compression_ratio": 0.6666666666666666
-}
-```
-
-Note: request field `model` is currently accepted but not used to select scorer mode by the API service.
-
-## Real Benchmark
-
-Built-in benchmark harness:
+Benchmark harness:
 
 ```bash
 cargo run --release -p compress-core --example benchmark -- \
@@ -255,16 +242,16 @@ cargo run --release -p compress-core --example benchmark -- \
   --mode both
 ```
 
-Measured on 2026-03-04 (`Darwin arm64`, `hw.model=Mac16,8`, 12 cores):
+Reference run from `2026-03-04` on `Darwin arm64` (`Mac16,8`, 12 cores):
 
 | Mode | Load (ms) | p50 (ms) | p95 (ms) | p99 (ms) | Mean (ms) | Prompts/s | Input tok/s | Tokens In -> Out | Ratio | Saved |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | Heuristic | 31.0 | 0.05 | 0.11 | 0.14 | 0.06 | 16732.9 | 854450 | 25532 -> 19684 | 0.771 | 22.9% |
 | ONNX | 186.7 | 26.35 | 27.45 | 31.92 | 26.55 | 37.7 | 1924 | 25532 -> 22927 | 0.898 | 10.2% |
 
-## Model Artifacts and Distribution
+## ONNX Model Artifacts
 
-When `--onnx` is enabled, model resolution order is:
+When `--onnx` is enabled, model directory resolution order is:
 
 1. `PROMPT_COMPRESS_MODEL`
 2. `./models`
@@ -272,21 +259,21 @@ When `--onnx` is enabled, model resolution order is:
 4. `../models`
 5. `../../models`
 
-Required files in model directory:
+Required files:
 
 - `model.onnx`
 - `tokenizer.json`
 
-Large ONNX files can exceed normal GitHub limits. Recommended options:
+For large binaries, prefer:
 
-1. Git LFS for repository-managed binaries
-2. GitHub Release assets for distribution-only binaries
+1. Git LFS for repo-managed artifacts
+2. GitHub Releases for distribution artifacts
 
-Current release asset example:
+Example release:
 
 - https://github.com/DevvGwardo/prompt-compress/releases/tag/model-v0.1.0
 
-## Training Pipeline
+## Training
 
 ```bash
 cd training
@@ -296,13 +283,19 @@ pip install -r requirements.txt
 python prepare_dataset.py --input corpus.txt --output data.jsonl --method heuristic
 python prepare_dataset.py --input corpus.txt --output data_claude.jsonl --method claude-cli
 
-# Train + export
+# Train and export
 python train.py --data data.jsonl --output ./output --epochs 3 --batch-size 16 --lr 5e-5
 python export_onnx.py --model-dir ./output/best --output ../models/model.onnx
 
 # Evaluate
 python evaluate.py --model-dir ./output/best --data data_claude_test.jsonl --show-samples 10
 ```
+
+## Documentation
+
+- Wiki pages are source-controlled in `wiki/` and published to GitHub Wiki
+- Wiki maintenance and publishing workflow: [CONTRIBUTING.md](CONTRIBUTING.md)
+- Wiki landing page: https://github.com/DevvGwardo/prompt-compress/wiki
 
 ## Development
 
@@ -324,10 +317,11 @@ prompt-compress/
 ├── integrations/
 │   └── openclaw/
 │       └── prompt-compress/
-├── wiki/
 ├── scripts/
-│   └── codex-compress
+│   ├── codex-compress
+│   └── publish-wiki.sh
 ├── training/
+├── wiki/
 └── models/
 ```
 
