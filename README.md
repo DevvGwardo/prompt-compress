@@ -159,7 +159,7 @@ COMPRESS_API_KEY=sk-your-secret cargo run --release -p compress-api
 Endpoints:
 
 - `POST /v1/compress`
-- `ANY /v1/proxy/*path` (provider proxy mode)
+- `ANY /v1/proxy/{*path}` (provider proxy mode)
 - `GET /health`
 
 Request example:
@@ -214,6 +214,7 @@ export COMPRESS_PROXY_ONLY_IF_SMALLER=1
 Start gateway:
 
 ```bash
+COMPRESS_API_HOST=127.0.0.1 \
 COMPRESS_API_KEY=sk-local-gateway cargo run --release -p compress-api
 ```
 
@@ -281,6 +282,8 @@ export PROMPT_COMPRESS_AGGRESSIVENESS=0.4
 export PROMPT_COMPRESS_USE_ONNX=0
 export PROMPT_COMPRESS_MODEL="$PWD/models"
 export PROMPT_COMPRESS_BIN="$PWD/target/release/compress"
+# optional: set when `codex` is aliased to this wrapper
+export PROMPT_COMPRESS_CODEX_BIN="/absolute/path/to/real/codex"
 export PROMPT_COMPRESS_INTERACTIVE_FIRST_PROMPT=1
 ```
 
