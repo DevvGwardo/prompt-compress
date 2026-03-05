@@ -34,6 +34,12 @@ Check:
 - client calls `/v1/proxy/chat/completions` or `/v1/proxy/responses`
 - local gateway auth header matches `COMPRESS_API_KEY`
 
+For ChatGPT-plan Codex:
+
+- prefer `scripts/codex-proxy` over `scripts/codex-compress`
+- the launcher should route Codex via `chatgpt_base_url`, not `OPENAI_BASE_URL`
+- upstream should be `https://chatgpt.com/backend-api`
+
 ## Compression not reducing tokens
 
 - lower `aggressiveness` may preserve too much text
@@ -52,6 +58,15 @@ Check:
 Note:
 
 - interactive Codex follow-up turns are currently not rewritten by this wrapper
+
+## Codex proxy stats are missing
+
+Check:
+
+- your shell alias points to `scripts/codex-proxy`
+- `compress-api` was restarted after updates (`pkill -f compress-api || true`)
+- watch `/tmp/prompt-compress-proxy.log`
+- prompts may be evaluated but not rewritten if `onlyIfSmaller=true` and token count does not improve
 
 ## Need API mode instead of CLI
 
