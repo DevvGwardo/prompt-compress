@@ -6,6 +6,10 @@
 
 `prompt-compress` is a Rust toolkit for reducing prompt token count before LLM calls while preserving critical content.
 
+## Start Here
+
+- New to this project? Use [Super Simple (Copy/Paste)](#super-simple-copypaste)
+
 It includes:
 
 - `compress-core`: embeddable library
@@ -21,6 +25,38 @@ It includes:
 - Choose fast heuristic scoring or ONNX scoring
 - Get explicit token metrics for observability
 - Deploy as library, CLI, or API
+
+## Super Simple (Copy/Paste)
+
+If you only want the easiest way to try this, run these 3 commands:
+
+```bash
+git clone https://github.com/DevvGwardo/prompt-compress.git
+cd prompt-compress
+cargo build --release
+```
+
+Now test it with one prompt:
+
+```bash
+echo "Write a short launch update for my team with 3 bullet points" \
+  | ./target/release/compress --stats
+```
+
+Use your own prompt:
+
+```bash
+echo "YOUR PROMPT HERE" | ./target/release/compress -a 0.4
+```
+
+Keep exact text unchanged with `<ttc_safe>`:
+
+```bash
+echo "Summarize <ttc_safe>ACME-SECRET-123</ttc_safe> and explain next steps" \
+  | ./target/release/compress
+```
+
+If that works, you are set. No API key is required for local CLI use.
 
 ## Quick Start
 
@@ -108,6 +144,12 @@ Start server:
 cargo run --release -p compress-api
 ```
 
+Optional bind host:
+
+```bash
+export COMPRESS_API_HOST=127.0.0.1
+```
+
 Enable bearer auth:
 
 ```bash
@@ -117,6 +159,7 @@ COMPRESS_API_KEY=sk-your-secret cargo run --release -p compress-api
 Endpoints:
 
 - `POST /v1/compress`
+- `ANY /v1/proxy/*path` (provider proxy mode)
 - `GET /health`
 
 Request example:
@@ -148,6 +191,58 @@ Response example:
 
 Note: `compress-api` currently supports `model` values `scorer-v0.1` and `heuristic-v0.1`.
 
+## Provider/Gateway Proxy (Per-Turn Compression)
+
+Run `compress-api` as a gateway that rewrites user prompt text before forwarding to your provider.
+
+Set required proxy env:
+
+```bash
+export COMPRESS_PROXY_UPSTREAM_BASE_URL="https://api.openai.com/v1"
+export COMPRESS_PROXY_UPSTREAM_API_KEY="sk-your-provider-key"
+```
+
+Optional tuning:
+
+```bash
+export COMPRESS_PROXY_AGGRESSIVENESS=0.4
+export COMPRESS_PROXY_TARGET_MODEL="gpt-4"
+export COMPRESS_PROXY_MIN_CHARS=80
+export COMPRESS_PROXY_ONLY_IF_SMALLER=1
+```
+
+Start gateway:
+
+```bash
+COMPRESS_API_KEY=sk-local-gateway cargo run --release -p compress-api
+```
+
+Use gateway path instead of provider path:
+
+- `POST /v1/proxy/chat/completions`
+- `POST /v1/proxy/responses`
+
+Example:
+
+```bash
+curl -s -X POST http://localhost:3000/v1/proxy/chat/completions \
+  -H "Authorization: Bearer sk-local-gateway" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4o-mini",
+    "messages": [
+      {"role": "user", "content": "Please create a detailed migration plan with rollback and validation steps."}
+    ]
+  }'
+```
+
+How this works:
+
+- Compresses user text blocks in each request (chat and responses payloads).
+- Forwards to upstream provider and returns upstream response/status.
+- Streams upstream responses through (including streaming endpoints).
+- Fails open: if rewriting fails, original request body is still forwarded.
+
 ## Codex Integration
 
 Use the wrapper script to compress prompts before sending them to `codex`.
@@ -171,6 +266,14 @@ Explicit prompt flow:
   -- exec
 ```
 
+Plain interactive launch (initial prompt compression):
+
+```bash
+./scripts/codex-compress
+```
+
+This prompts for one initial message, compresses it, then launches interactive `codex`.
+
 Recommended environment defaults:
 
 ```bash
@@ -178,13 +281,21 @@ export PROMPT_COMPRESS_AGGRESSIVENESS=0.4
 export PROMPT_COMPRESS_USE_ONNX=0
 export PROMPT_COMPRESS_MODEL="$PWD/models"
 export PROMPT_COMPRESS_BIN="$PWD/target/release/compress"
+export PROMPT_COMPRESS_INTERACTIVE_FIRST_PROMPT=1
 ```
 
 Optional alias:
 
 ```bash
 alias codexp="$PWD/scripts/codex-compress"
+# or replace codex directly:
+alias codex="$PWD/scripts/codex-compress"
 ```
+
+Notes:
+
+- With interactive `codex`, this wrapper compresses the initial message only.
+- For per-request compression in a gateway workflow, use the OpenClaw plugin below.
 
 ## OpenClaw Integration
 

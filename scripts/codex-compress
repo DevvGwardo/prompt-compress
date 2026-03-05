@@ -12,6 +12,7 @@ Usage:
 Prompt sources (priority):
   1) --prompt "..."
   2) stdin (if piped)
+  3) interactive first prompt (plain `codex-compress` launch, optional)
 
 Wrapper options:
   --prompt TEXT              Prompt text to compress
@@ -28,6 +29,10 @@ Environment defaults:
   PROMPT_COMPRESS_USE_ONNX      (1/true/yes to enable)
   PROMPT_COMPRESS_MODEL          (used by compress --model-dir and ONNX auto-discovery)
   PROMPT_COMPRESS_BIN            (path to prompt-compress binary)
+  PROMPT_COMPRESS_CODEX_BIN      (path to codex binary, optional)
+  PROMPT_COMPRESS_INTERACTIVE_FIRST_PROMPT
+                                (1/true/yes to prompt for an initial
+                                 message when launched with no args)
 EOF
 }
 
@@ -44,9 +49,15 @@ USE_ONNX=0
 MODEL_DIR="${PROMPT_COMPRESS_MODEL:-}"
 SHOW_STATS=0
 PROMPT=""
+CODEX_BIN=""
+INTERACTIVE_FIRST_PROMPT=0
 
 if to_bool "${PROMPT_COMPRESS_USE_ONNX:-0}"; then
   USE_ONNX=1
+fi
+
+if to_bool "${PROMPT_COMPRESS_INTERACTIVE_FIRST_PROMPT:-1}"; then
+  INTERACTIVE_FIRST_PROMPT=1
 fi
 
 # Parse wrapper options. Everything else is forwarded as codex args.
@@ -96,6 +107,41 @@ done
 
 CODEX_ARGS=("$@")
 
+resolve_codex_cmd() {
+  if [[ -n "${PROMPT_COMPRESS_CODEX_BIN:-}" ]]; then
+    if [[ -x "${PROMPT_COMPRESS_CODEX_BIN}" ]]; then
+      echo "${PROMPT_COMPRESS_CODEX_BIN}"
+      return 0
+    fi
+    echo "error: PROMPT_COMPRESS_CODEX_BIN is set but not executable: ${PROMPT_COMPRESS_CODEX_BIN}" >&2
+    exit 1
+  fi
+
+  local script_path
+  script_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")"
+
+  local candidate
+  candidate="$(command -v codex || true)"
+  if [[ -n "$candidate" && "$candidate" != "$script_path" ]]; then
+    echo "$candidate"
+    return 0
+  fi
+
+  while IFS= read -r candidate; do
+    [[ -z "$candidate" ]] && continue
+    [[ "$candidate" == "$script_path" ]] && continue
+    if [[ -x "$candidate" ]]; then
+      echo "$candidate"
+      return 0
+    fi
+  done < <(which -a codex 2>/dev/null || true)
+
+  echo "error: could not locate a real codex binary in PATH" >&2
+  exit 1
+}
+
+CODEX_BIN="$(resolve_codex_cmd)"
+
 # Resolve prompt from stdin when available.
 if [[ -z "$PROMPT" ]]; then
   if [[ ! -t 0 ]]; then
@@ -103,9 +149,15 @@ if [[ -z "$PROMPT" ]]; then
   fi
 fi
 
+# Optional interactive initial prompt for plain launches.
+if [[ -z "$PROMPT" && ${#CODEX_ARGS[@]} -eq 0 && $INTERACTIVE_FIRST_PROMPT -eq 1 && -t 0 ]]; then
+  printf "codex-compress initial prompt (blank to skip): " >&2
+  IFS= read -r PROMPT || true
+fi
+
 # If no prompt, run codex unchanged.
 if [[ -z "${PROMPT//[[:space:]]/}" ]]; then
-  exec codex "${CODEX_ARGS[@]}"
+  exec "$CODEX_BIN" "${CODEX_ARGS[@]}"
 fi
 
 resolve_compress_cmd() {
@@ -176,4 +228,4 @@ if [[ -z "${COMPRESSED_PROMPT//[[:space:]]/}" ]]; then
   exit 1
 fi
 
-exec codex "${CODEX_ARGS[@]}" "$COMPRESSED_PROMPT"
+exec "$CODEX_BIN" "${CODEX_ARGS[@]}" "$COMPRESSED_PROMPT"

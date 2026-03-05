@@ -11,6 +11,7 @@ Core docs live in the repository README:
 - [CLI Reference](CLI-Reference)
 - [OpenClaw Integration](OpenClaw-Integration)
 - [Codex Integration](Codex-Integration)
+- [Provider Gateway Proxy](Provider-Gateway-Proxy)
 - [Benchmarks](Benchmarks)
 - [Model Distribution (LFS and Releases)](Model-Distribution-(LFS-and-Releases))
 - [Troubleshooting](Troubleshooting)
