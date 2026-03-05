@@ -59,12 +59,15 @@ fn counter_is_reusable() {
 
 #[test]
 fn different_model_names_still_work() {
-    // Currently all models use cl100k_base, so any name should work.
+    // Known and fallback model names should both resolve to a tokenizer.
     let counter = LlmTokenCounter::new("claude").unwrap();
     assert!(counter.count("hello") >= 1);
 
     let counter2 = LlmTokenCounter::new("gpt-3.5-turbo").unwrap();
     assert!(counter2.count("hello") >= 1);
+
+    let counter3 = LlmTokenCounter::new("unknown-model-name").unwrap();
+    assert!(counter3.count("hello") >= 1);
 }
 
 #[test]

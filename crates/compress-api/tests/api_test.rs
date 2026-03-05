@@ -42,6 +42,20 @@ async fn compress_handler(
     axum::extract::State(state): axum::extract::State<AppState>,
     axum::Json(req): axum::Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    let model = req
+        .get("model")
+        .and_then(|m| m.as_str())
+        .unwrap_or("scorer-v0.1");
+    if model != "scorer-v0.1" && model != "heuristic-v0.1" {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            axum::Json(
+                json!({"error": {"message": "unsupported model", "type": "invalid_request_error"}}),
+            ),
+        )
+            .into_response();
+    }
+
     let input = req["input"].as_str().unwrap_or_default();
     let aggressiveness = req
         .get("compression_settings")

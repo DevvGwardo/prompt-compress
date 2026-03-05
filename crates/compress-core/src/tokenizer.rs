@@ -1,4 +1,4 @@
-use tiktoken_rs::{cl100k_base, CoreBPE};
+use tiktoken_rs::{cl100k_base, get_bpe_from_model, o200k_base, CoreBPE};
 
 use crate::error::{CompressError, Result};
 
@@ -8,10 +8,29 @@ pub struct LlmTokenCounter {
 }
 
 impl LlmTokenCounter {
-    /// Create a new token counter. Currently uses cl100k_base (GPT-4 / Claude tokenizer).
-    pub fn new(_target_model: &str) -> Result<Self> {
-        // cl100k_base covers GPT-4, GPT-3.5-turbo, and is a reasonable proxy for Claude
-        let bpe = cl100k_base().map_err(|e| CompressError::Tokenizer(e.to_string()))?;
+    /// Create a new token counter using the best available tokenizer for the target model.
+    pub fn new(target_model: &str) -> Result<Self> {
+        let normalized = target_model.trim().to_lowercase();
+
+        let bpe = get_bpe_from_model(target_model)
+            .or_else(|_| {
+                // Common non-OpenAI aliases used by clients.
+                if normalized.starts_with("claude") {
+                    cl100k_base()
+                } else if normalized.starts_with("gpt-5")
+                    || normalized.starts_with("gpt-4.1")
+                    || normalized.starts_with("gpt-4o")
+                    || normalized.starts_with("o1")
+                    || normalized.starts_with("o3")
+                    || normalized.starts_with("o4")
+                {
+                    o200k_base()
+                } else {
+                    cl100k_base()
+                }
+            })
+            .map_err(|e| CompressError::Tokenizer(e.to_string()))?;
+
         Ok(Self { bpe })
     }
 

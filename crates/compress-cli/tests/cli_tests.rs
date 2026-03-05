@@ -10,7 +10,12 @@ fn compress_bin() -> Command {
 #[test]
 fn inline_input_produces_output() {
     let output = compress_bin()
-        .args(["-i", "the quick brown fox jumps over the lazy dog", "-a", "0.5"])
+        .args([
+            "-i",
+            "the quick brown fox jumps over the lazy dog",
+            "-a",
+            "0.5",
+        ])
         .output()
         .unwrap();
 
@@ -63,7 +68,14 @@ fn file_input_produces_output() {
 #[test]
 fn text_format_is_plain_text() {
     let output = compress_bin()
-        .args(["-i", "hello world test input", "-a", "0.3", "--format", "text"])
+        .args([
+            "-i",
+            "hello world test input",
+            "-a",
+            "0.3",
+            "--format",
+            "text",
+        ])
         .output()
         .unwrap();
 
@@ -76,7 +88,14 @@ fn text_format_is_plain_text() {
 #[test]
 fn json_format_returns_valid_json() {
     let output = compress_bin()
-        .args(["-i", "the quick brown fox jumps over the lazy dog", "-a", "0.5", "--format", "json"])
+        .args([
+            "-i",
+            "the quick brown fox jumps over the lazy dog",
+            "-a",
+            "0.5",
+            "--format",
+            "json",
+        ])
         .output()
         .unwrap();
 
@@ -96,8 +115,10 @@ fn json_format_has_valid_ratio() {
         .args([
             "-i",
             "the quick brown fox jumps over the lazy dog",
-            "-a", "0.5",
-            "--format", "json",
+            "-a",
+            "0.5",
+            "--format",
+            "json",
         ])
         .output()
         .unwrap();
@@ -106,7 +127,7 @@ fn json_format_has_valid_ratio() {
         serde_json::from_str(&String::from_utf8(output.stdout).unwrap()).unwrap();
 
     let ratio = json["compression_ratio"].as_f64().unwrap();
-    assert!(ratio >= 0.0 && ratio <= 1.0, "ratio {ratio} out of bounds");
+    assert!((0.0..=1.0).contains(&ratio), "ratio {ratio} out of bounds");
 }
 
 // ─── Stats flag ──────────────────────────────────────────────────────
@@ -189,7 +210,8 @@ fn safe_tags_survive_compression() {
         .args([
             "-i",
             "remove the filler but <ttc_safe>keep this</ttc_safe> always",
-            "-a", "0.9",
+            "-a",
+            "0.9",
         ])
         .output()
         .unwrap();
@@ -228,7 +250,10 @@ fn no_input_exits_with_error() {
     let output = child.wait_with_output().unwrap();
     assert!(!output.status.success());
     let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("no input") || stderr.contains("empty"), "stderr: {stderr}");
+    assert!(
+        stderr.contains("no input") || stderr.contains("empty"),
+        "stderr: {stderr}"
+    );
 }
 
 // ─── Version and help ────────────────────────────────────────────────

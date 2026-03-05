@@ -1,6 +1,6 @@
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use compress_core::{find_model, CompressionSettings, Compressor, HeuristicScorer, OnnxScorer};
@@ -281,7 +281,7 @@ fn run_onnx(
     Ok(result)
 }
 
-fn path_to_str(path: &PathBuf) -> Result<&str, String> {
+fn path_to_str(path: &Path) -> Result<&str, String> {
     path.to_str()
         .ok_or_else(|| format!("path is not valid UTF-8: {}", path.display()))
 }
@@ -297,9 +297,7 @@ fn print_table(results: &[BenchResult], args: &Args) {
     println!(
         "| Mode | Load (ms) | p50 (ms) | p95 (ms) | p99 (ms) | Mean (ms) | Prompts/s | Input tok/s | Tokens In -> Out | Ratio | Saved |"
     );
-    println!(
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
-    );
+    println!("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
     for r in results {
         println!(
             "| {} | {:.1} | {:.2} | {:.2} | {:.2} | {:.2} | {:.1} | {:.0} | {} -> {} | {:.3} | {:.1}% |",

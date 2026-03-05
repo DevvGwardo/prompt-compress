@@ -18,13 +18,19 @@ impl Compressor {
     }
 
     /// Compress the input text according to the given settings.
-    pub fn compress(&self, input: &str, settings: &CompressionSettings) -> Result<CompressionResult> {
+    pub fn compress(
+        &self,
+        input: &str,
+        settings: &CompressionSettings,
+    ) -> Result<CompressionResult> {
         if input.trim().is_empty() {
             return Err(CompressError::EmptyInput);
         }
 
         if settings.aggressiveness < 0.0 || settings.aggressiveness > 1.0 {
-            return Err(CompressError::InvalidAggressiveness(settings.aggressiveness));
+            return Err(CompressError::InvalidAggressiveness(
+                settings.aggressiveness,
+            ));
         }
 
         let original_tokens = self.counter.count(input);
@@ -40,13 +46,13 @@ impl Compressor {
         }
 
         // Extract safe regions before scoring
-        let (cleaned_input, safe_regions) = extract_safe_regions(input);
+        let (cleaned_input, safe_mask) = extract_safe_regions(input);
 
         // Score tokens
         let mut scored = self.scorer.score(&cleaned_input)?;
 
         // Mark protected tokens
-        mark_protected_tokens(&mut scored, &safe_regions);
+        mark_protected_tokens(&mut scored, &safe_mask);
 
         // Filter based on threshold: higher aggressiveness → higher threshold → more tokens removed
         let threshold = settings.aggressiveness;
@@ -68,29 +74,41 @@ impl Compressor {
     }
 }
 
-/// Extract `<ttc_safe>...</ttc_safe>` regions and return cleaned text + safe word sets.
-fn extract_safe_regions(input: &str) -> (String, Vec<String>) {
-    let re = Regex::new(r"<ttc_safe>(.*?)</ttc_safe>").unwrap();
-    let mut safe_words = Vec::new();
+/// Extract `<ttc_safe>...</ttc_safe>` regions and return cleaned text + per-word safe mask.
+fn extract_safe_regions(input: &str) -> (String, Vec<bool>) {
+    let re = Regex::new(r"(?s)<ttc_safe>(.*?)</ttc_safe>").unwrap();
+    let mut safe_mask = Vec::new();
+    let mut last_end = 0usize;
 
     for cap in re.captures_iter(input) {
+        let full = cap.get(0).unwrap();
+
+        // Unprotected words before the safe block.
+        let unprotected_count = input[last_end..full.start()].split_whitespace().count();
+        safe_mask.extend(std::iter::repeat_n(false, unprotected_count));
+
+        // Protected words inside the safe block.
         if let Some(content) = cap.get(1) {
-            // Collect each word inside safe tags
-            for word in content.as_str().split_whitespace() {
-                safe_words.push(word.to_string());
-            }
+            let protected_count = content.as_str().split_whitespace().count();
+            safe_mask.extend(std::iter::repeat_n(true, protected_count));
         }
+
+        last_end = full.end();
     }
 
-    // Remove the tags but keep the content
+    // Unprotected words after the last safe block.
+    let trailing_unprotected_count = input[last_end..].split_whitespace().count();
+    safe_mask.extend(std::iter::repeat_n(false, trailing_unprotected_count));
+
+    // Remove the tags but keep the content.
     let cleaned = re.replace_all(input, "$1").to_string();
-    (cleaned, safe_words)
+    (cleaned, safe_mask)
 }
 
 /// Mark tokens that fall within safe regions as protected.
-fn mark_protected_tokens(tokens: &mut [ScoredToken], safe_words: &[String]) {
-    for token in tokens.iter_mut() {
-        if safe_words.contains(&token.text) {
+fn mark_protected_tokens(tokens: &mut [ScoredToken], safe_mask: &[bool]) {
+    for (idx, token) in tokens.iter_mut().enumerate() {
+        if safe_mask.get(idx).copied().unwrap_or(false) {
             token.protected = true;
             token.importance = 1.0;
         }
@@ -156,7 +174,10 @@ mod tests {
         let input = "the quick brown fox jumps over the lazy dog and it was a very good day";
         let result = c.compress(input, &settings).unwrap();
 
-        assert!(result.compression_ratio < 0.5, "high aggressiveness should compress heavily");
+        assert!(
+            result.compression_ratio < 0.5,
+            "high aggressiveness should compress heavily"
+        );
     }
 
     #[test]
@@ -169,8 +190,14 @@ mod tests {
         let input = "the <ttc_safe>critical value</ttc_safe> is important";
         let result = c.compress(input, &settings).unwrap();
 
-        assert!(result.output.contains("critical"), "safe-tagged words must survive");
-        assert!(result.output.contains("value"), "safe-tagged words must survive");
+        assert!(
+            result.output.contains("critical"),
+            "safe-tagged words must survive"
+        );
+        assert!(
+            result.output.contains("value"),
+            "safe-tagged words must survive"
+        );
     }
 
     #[test]
@@ -196,14 +223,23 @@ mod tests {
     fn test_extract_safe_regions() {
         let (cleaned, safe) = extract_safe_regions("hello <ttc_safe>world</ttc_safe> foo");
         assert_eq!(cleaned, "hello world foo");
-        assert_eq!(safe, vec!["world"]);
+        assert_eq!(safe, vec![false, true, false]);
     }
 
     #[test]
     fn test_multiple_safe_regions() {
-        let (cleaned, safe) =
-            extract_safe_regions("<ttc_safe>keep this</ttc_safe> and <ttc_safe>also this</ttc_safe>");
+        let (cleaned, safe) = extract_safe_regions(
+            "<ttc_safe>keep this</ttc_safe> and <ttc_safe>also this</ttc_safe>",
+        );
         assert_eq!(cleaned, "keep this and also this");
-        assert_eq!(safe, vec!["keep", "this", "also", "this"]);
+        assert_eq!(safe, vec![true, true, false, true, true]);
+    }
+
+    #[test]
+    fn test_multiline_safe_region() {
+        let (cleaned, safe) =
+            extract_safe_regions("start <ttc_safe>critical\nvalue</ttc_safe> end");
+        assert_eq!(cleaned, "start critical\nvalue end");
+        assert_eq!(safe, vec![false, true, true, false]);
     }
 }

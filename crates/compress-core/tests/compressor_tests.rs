@@ -1,6 +1,4 @@
-use compress_core::{
-    CompressionSettings, Compressor, HeuristicScorer,
-};
+use compress_core::{CompressionSettings, Compressor, HeuristicScorer};
 
 fn make_compressor() -> Compressor {
     Compressor::new(Box::new(HeuristicScorer::new()), "gpt-4").unwrap()
@@ -13,7 +11,13 @@ fn aggressiveness_zero_returns_input_unchanged() {
     let c = make_compressor();
     let input = "the quick brown fox jumps over the lazy dog";
     let result = c
-        .compress(input, &CompressionSettings { aggressiveness: 0.0, ..Default::default() })
+        .compress(
+            input,
+            &CompressionSettings {
+                aggressiveness: 0.0,
+                ..Default::default()
+            },
+        )
         .unwrap();
     assert_eq!(result.output, input);
     assert_eq!(result.compression_ratio, 1.0);
@@ -24,7 +28,13 @@ fn aggressiveness_one_compresses_maximally() {
     let c = make_compressor();
     let input = "the quick brown fox jumps over the lazy dog";
     let result = c
-        .compress(input, &CompressionSettings { aggressiveness: 1.0, ..Default::default() })
+        .compress(
+            input,
+            &CompressionSettings {
+                aggressiveness: 1.0,
+                ..Default::default()
+            },
+        )
         .unwrap();
     // At threshold 1.0, only tokens with importance >= 1.0 survive.
     // No heuristic token hits 1.0, so output should be empty or very short.
@@ -40,13 +50,31 @@ fn increasing_aggressiveness_reduces_output() {
     let input = "the quick brown fox jumps over the lazy dog and it was a very good day for everyone in the park";
 
     let low = c
-        .compress(input, &CompressionSettings { aggressiveness: 0.3, ..Default::default() })
+        .compress(
+            input,
+            &CompressionSettings {
+                aggressiveness: 0.3,
+                ..Default::default()
+            },
+        )
         .unwrap();
     let mid = c
-        .compress(input, &CompressionSettings { aggressiveness: 0.5, ..Default::default() })
+        .compress(
+            input,
+            &CompressionSettings {
+                aggressiveness: 0.5,
+                ..Default::default()
+            },
+        )
         .unwrap();
     let high = c
-        .compress(input, &CompressionSettings { aggressiveness: 0.8, ..Default::default() })
+        .compress(
+            input,
+            &CompressionSettings {
+                aggressiveness: 0.8,
+                ..Default::default()
+            },
+        )
         .unwrap();
 
     assert!(
@@ -69,7 +97,10 @@ fn compression_ratio_is_correct() {
     let result = c
         .compress(
             "the quick brown fox",
-            &CompressionSettings { aggressiveness: 0.5, ..Default::default() },
+            &CompressionSettings {
+                aggressiveness: 0.5,
+                ..Default::default()
+            },
         )
         .unwrap();
 
@@ -87,9 +118,7 @@ fn compression_ratio_is_correct() {
 #[test]
 fn empty_input_returns_error() {
     let c = make_compressor();
-    let err = c
-        .compress("", &CompressionSettings::default())
-        .unwrap_err();
+    let err = c.compress("", &CompressionSettings::default()).unwrap_err();
     assert!(err.to_string().contains("empty"), "error: {err}");
 }
 
@@ -108,13 +137,13 @@ fn negative_aggressiveness_returns_error() {
     let err = c
         .compress(
             "hello",
-            &CompressionSettings { aggressiveness: -0.1, ..Default::default() },
+            &CompressionSettings {
+                aggressiveness: -0.1,
+                ..Default::default()
+            },
         )
         .unwrap_err();
-    assert!(
-        err.to_string().contains("aggressiveness"),
-        "error: {err}"
-    );
+    assert!(err.to_string().contains("aggressiveness"), "error: {err}");
 }
 
 #[test]
@@ -123,13 +152,13 @@ fn aggressiveness_above_one_returns_error() {
     let err = c
         .compress(
             "hello",
-            &CompressionSettings { aggressiveness: 1.5, ..Default::default() },
+            &CompressionSettings {
+                aggressiveness: 1.5,
+                ..Default::default()
+            },
         )
         .unwrap_err();
-    assert!(
-        err.to_string().contains("aggressiveness"),
-        "error: {err}"
-    );
+    assert!(err.to_string().contains("aggressiveness"), "error: {err}");
 }
 
 // ─── Safe tags ───────────────────────────────────────────────────────
@@ -140,13 +169,25 @@ fn safe_tags_preserve_words_at_max_aggressiveness() {
     let result = c
         .compress(
             "remove this but <ttc_safe>keep these words</ttc_safe> definitely",
-            &CompressionSettings { aggressiveness: 1.0, ..Default::default() },
+            &CompressionSettings {
+                aggressiveness: 1.0,
+                ..Default::default()
+            },
         )
         .unwrap();
 
-    assert!(result.output.contains("keep"), "safe word 'keep' must survive");
-    assert!(result.output.contains("these"), "safe word 'these' must survive");
-    assert!(result.output.contains("words"), "safe word 'words' must survive");
+    assert!(
+        result.output.contains("keep"),
+        "safe word 'keep' must survive"
+    );
+    assert!(
+        result.output.contains("these"),
+        "safe word 'these' must survive"
+    );
+    assert!(
+        result.output.contains("words"),
+        "safe word 'words' must survive"
+    );
 }
 
 #[test]
@@ -155,7 +196,10 @@ fn multiple_safe_regions() {
     let result = c
         .compress(
             "<ttc_safe>first</ttc_safe> remove the filler <ttc_safe>second</ttc_safe>",
-            &CompressionSettings { aggressiveness: 1.0, ..Default::default() },
+            &CompressionSettings {
+                aggressiveness: 1.0,
+                ..Default::default()
+            },
         )
         .unwrap();
 
@@ -170,7 +214,10 @@ fn safe_tags_are_removed_from_output() {
     let result = c
         .compress(
             "hello <ttc_safe>world</ttc_safe>",
-            &CompressionSettings { aggressiveness: 0.3, ..Default::default() },
+            &CompressionSettings {
+                aggressiveness: 0.3,
+                ..Default::default()
+            },
         )
         .unwrap();
 
@@ -180,12 +227,48 @@ fn safe_tags_are_removed_from_output() {
 }
 
 #[test]
+fn safe_tags_do_not_protect_matching_words_outside_tagged_region() {
+    let c = make_compressor();
+    let result = c
+        .compress(
+            "<ttc_safe>apple</ttc_safe> and filler apple filler",
+            &CompressionSettings {
+                aggressiveness: 1.0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    assert_eq!(result.output.trim(), "apple");
+}
+
+#[test]
+fn multiline_safe_tags_are_preserved() {
+    let c = make_compressor();
+    let result = c
+        .compress(
+            "start <ttc_safe>critical\nvalue</ttc_safe> end",
+            &CompressionSettings {
+                aggressiveness: 1.0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    assert!(result.output.contains("critical"));
+    assert!(result.output.contains("value"));
+}
+
+#[test]
 fn nested_safe_tags_handled_gracefully() {
     // Regex is non-greedy, so nested tags get partial matches — shouldn't panic.
     let c = make_compressor();
     let result = c.compress(
         "<ttc_safe>outer <ttc_safe>inner</ttc_safe> end</ttc_safe>",
-        &CompressionSettings { aggressiveness: 0.5, ..Default::default() },
+        &CompressionSettings {
+            aggressiveness: 0.5,
+            ..Default::default()
+        },
     );
     assert!(result.is_ok());
 }
@@ -195,7 +278,10 @@ fn empty_safe_tags_dont_break() {
     let c = make_compressor();
     let result = c.compress(
         "hello <ttc_safe></ttc_safe> world",
-        &CompressionSettings { aggressiveness: 0.5, ..Default::default() },
+        &CompressionSettings {
+            aggressiveness: 0.5,
+            ..Default::default()
+        },
     );
     assert!(result.is_ok());
 }
@@ -216,7 +302,13 @@ fn output_tokens_less_than_or_equal_original() {
     let c = make_compressor();
     let input = "the quick brown fox jumps over the lazy dog";
     let result = c
-        .compress(input, &CompressionSettings { aggressiveness: 0.5, ..Default::default() })
+        .compress(
+            input,
+            &CompressionSettings {
+                aggressiveness: 0.5,
+                ..Default::default()
+            },
+        )
         .unwrap();
     assert!(result.output_tokens <= result.original_input_tokens);
 }
@@ -227,7 +319,10 @@ fn compression_ratio_bounded_zero_to_one() {
     let result = c
         .compress(
             "the quick brown fox jumps over the lazy dog",
-            &CompressionSettings { aggressiveness: 0.5, ..Default::default() },
+            &CompressionSettings {
+                aggressiveness: 0.5,
+                ..Default::default()
+            },
         )
         .unwrap();
     assert!(result.compression_ratio >= 0.0);
@@ -239,10 +334,15 @@ fn compression_ratio_bounded_zero_to_one() {
 #[test]
 fn compressor_reusable_across_calls() {
     let c = make_compressor();
-    let settings = CompressionSettings { aggressiveness: 0.5, ..Default::default() };
+    let settings = CompressionSettings {
+        aggressiveness: 0.5,
+        ..Default::default()
+    };
 
     let r1 = c.compress("first call with some text", &settings).unwrap();
-    let r2 = c.compress("second call with different text", &settings).unwrap();
+    let r2 = c
+        .compress("second call with different text", &settings)
+        .unwrap();
 
     assert!(!r1.output.is_empty());
     assert!(!r2.output.is_empty());
@@ -252,7 +352,10 @@ fn compressor_reusable_across_calls() {
 #[test]
 fn same_input_gives_deterministic_output() {
     let c = make_compressor();
-    let settings = CompressionSettings { aggressiveness: 0.5, ..Default::default() };
+    let settings = CompressionSettings {
+        aggressiveness: 0.5,
+        ..Default::default()
+    };
     let input = "the quick brown fox jumps over the lazy dog";
 
     let r1 = c.compress(input, &settings).unwrap();
@@ -269,7 +372,13 @@ fn same_input_gives_deterministic_output() {
 fn single_word_input() {
     let c = make_compressor();
     let result = c
-        .compress("hello", &CompressionSettings { aggressiveness: 0.3, ..Default::default() })
+        .compress(
+            "hello",
+            &CompressionSettings {
+                aggressiveness: 0.3,
+                ..Default::default()
+            },
+        )
         .unwrap();
     assert!(!result.output.is_empty());
 }
@@ -278,7 +387,13 @@ fn single_word_input() {
 fn single_stop_word_at_high_aggressiveness() {
     let c = make_compressor();
     let result = c
-        .compress("the", &CompressionSettings { aggressiveness: 0.9, ..Default::default() })
+        .compress(
+            "the",
+            &CompressionSettings {
+                aggressiveness: 0.9,
+                ..Default::default()
+            },
+        )
         .unwrap();
     // "the" scores 0.2, threshold 0.9 — should be dropped
     assert!(result.output.is_empty() || result.output == "the");
@@ -289,7 +404,13 @@ fn long_input_doesnt_panic() {
     let c = make_compressor();
     let input = "the quick brown fox ".repeat(1000);
     let result = c
-        .compress(&input, &CompressionSettings { aggressiveness: 0.5, ..Default::default() })
+        .compress(
+            &input,
+            &CompressionSettings {
+                aggressiveness: 0.5,
+                ..Default::default()
+            },
+        )
         .unwrap();
     assert!(!result.output.is_empty());
     assert!(result.output.len() < input.len());
@@ -300,7 +421,10 @@ fn unicode_input() {
     let c = make_compressor();
     let result = c.compress(
         "Le café est très bon aujourd'hui",
-        &CompressionSettings { aggressiveness: 0.3, ..Default::default() },
+        &CompressionSettings {
+            aggressiveness: 0.3,
+            ..Default::default()
+        },
     );
     assert!(result.is_ok());
 }
@@ -310,7 +434,10 @@ fn input_with_newlines() {
     let c = make_compressor();
     let result = c.compress(
         "line one\nline two\nline three",
-        &CompressionSettings { aggressiveness: 0.3, ..Default::default() },
+        &CompressionSettings {
+            aggressiveness: 0.3,
+            ..Default::default()
+        },
     );
     assert!(result.is_ok());
     assert!(!result.unwrap().output.is_empty());
@@ -321,7 +448,10 @@ fn input_with_tabs_and_mixed_whitespace() {
     let c = make_compressor();
     let result = c.compress(
         "word1\t\tword2   word3",
-        &CompressionSettings { aggressiveness: 0.3, ..Default::default() },
+        &CompressionSettings {
+            aggressiveness: 0.3,
+            ..Default::default()
+        },
     );
     assert!(result.is_ok());
     let output = result.unwrap();

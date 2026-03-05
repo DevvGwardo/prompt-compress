@@ -146,7 +146,7 @@ Response example:
 }
 ```
 
-Note: `model` is currently accepted for compatibility but does not yet select scorer mode in `compress-api`.
+Note: `compress-api` currently supports `model` values `scorer-v0.1` and `heuristic-v0.1`.
 
 ## Codex Integration
 

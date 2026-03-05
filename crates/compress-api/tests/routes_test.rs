@@ -42,6 +42,20 @@ async fn compress_handler(
     axum::extract::State(state): axum::extract::State<AppState>,
     axum::Json(req): axum::Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    let model = req
+        .get("model")
+        .and_then(|m| m.as_str())
+        .unwrap_or("scorer-v0.1");
+    if model != "scorer-v0.1" && model != "heuristic-v0.1" {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            axum::Json(
+                json!({"error": {"message": "unsupported model", "type": "invalid_request_error"}}),
+            ),
+        )
+            .into_response();
+    }
+
     let input = req["input"].as_str().unwrap_or_default();
     let aggressiveness = req
         .get("compression_settings")
@@ -64,7 +78,9 @@ async fn compress_handler(
         .into_response(),
         Err(e) => (
             axum::http::StatusCode::BAD_REQUEST,
-            axum::Json(json!({"error": {"message": e.to_string(), "type": "invalid_request_error"}})),
+            axum::Json(
+                json!({"error": {"message": e.to_string(), "type": "invalid_request_error"}}),
+            ),
         )
             .into_response(),
     }
@@ -73,7 +89,10 @@ async fn compress_handler(
 fn build_app(api_key: Option<String>) -> Router {
     let scorer = HeuristicScorer::new();
     let compressor = Arc::new(Compressor::new(Box::new(scorer), "gpt-4").unwrap());
-    let state = AppState { compressor, api_key };
+    let state = AppState {
+        compressor,
+        api_key,
+    };
 
     let api_routes = Router::new()
         .route("/v1/compress", routing::post(compress_handler))
@@ -104,9 +123,18 @@ async fn response_contains_all_required_fields() {
     let body: serde_json::Value = response.json();
 
     assert!(body.get("output").is_some(), "missing 'output' field");
-    assert!(body.get("output_tokens").is_some(), "missing 'output_tokens'");
-    assert!(body.get("original_input_tokens").is_some(), "missing 'original_input_tokens'");
-    assert!(body.get("compression_ratio").is_some(), "missing 'compression_ratio'");
+    assert!(
+        body.get("output_tokens").is_some(),
+        "missing 'output_tokens'"
+    );
+    assert!(
+        body.get("original_input_tokens").is_some(),
+        "missing 'original_input_tokens'"
+    );
+    assert!(
+        body.get("compression_ratio").is_some(),
+        "missing 'compression_ratio'"
+    );
 }
 
 #[tokio::test]
@@ -122,7 +150,7 @@ async fn compression_ratio_is_between_zero_and_one() {
 
     let body: serde_json::Value = response.json();
     let ratio = body["compression_ratio"].as_f64().unwrap();
-    assert!(ratio >= 0.0 && ratio <= 1.0, "ratio {ratio} out of bounds");
+    assert!((0.0..=1.0).contains(&ratio), "ratio {ratio} out of bounds");
 }
 
 #[tokio::test]
@@ -180,7 +208,8 @@ async fn default_aggressiveness_when_omitted() {
 #[tokio::test]
 async fn increasing_aggressiveness_reduces_tokens() {
     let server = TestServer::new(build_app(None));
-    let input = "the quick brown fox jumps over the lazy dog and it was a very good day for everyone";
+    let input =
+        "the quick brown fox jumps over the lazy dog and it was a very good day for everyone";
 
     let low = server
         .post("/v1/compress")
@@ -191,8 +220,12 @@ async fn increasing_aggressiveness_reduces_tokens() {
         .json(&json!({ "input": input, "compression_settings": { "aggressiveness": 0.8 } }))
         .await;
 
-    let low_tokens = low.json::<serde_json::Value>()["output_tokens"].as_u64().unwrap();
-    let high_tokens = high.json::<serde_json::Value>()["output_tokens"].as_u64().unwrap();
+    let low_tokens = low.json::<serde_json::Value>()["output_tokens"]
+        .as_u64()
+        .unwrap();
+    let high_tokens = high.json::<serde_json::Value>()["output_tokens"]
+        .as_u64()
+        .unwrap();
 
     assert!(low_tokens >= high_tokens);
 }
@@ -230,7 +263,10 @@ async fn empty_input_returns_400() {
     response.assert_status_bad_request();
     let body: serde_json::Value = response.json();
     assert!(body["error"]["message"].as_str().unwrap().contains("empty"));
-    assert_eq!(body["error"]["type"].as_str().unwrap(), "invalid_request_error");
+    assert_eq!(
+        body["error"]["type"].as_str().unwrap(),
+        "invalid_request_error"
+    );
 }
 
 #[tokio::test]
@@ -256,10 +292,29 @@ async fn invalid_json_returns_error() {
     // axum returns 422 for unprocessable JSON
     let status = response.status_code();
     assert!(
-        status == http::StatusCode::BAD_REQUEST
-            || status == http::StatusCode::UNPROCESSABLE_ENTITY,
+        status == http::StatusCode::BAD_REQUEST || status == http::StatusCode::UNPROCESSABLE_ENTITY,
         "expected 400 or 422, got {status}"
     );
+}
+
+#[tokio::test]
+async fn unsupported_model_returns_400() {
+    let server = TestServer::new(build_app(None));
+    let response = server
+        .post("/v1/compress")
+        .json(&json!({
+            "model": "unknown-model",
+            "input": "the quick brown fox",
+            "compression_settings": { "aggressiveness": 0.5 }
+        }))
+        .await;
+
+    response.assert_status_bad_request();
+    let body: serde_json::Value = response.json();
+    assert!(body["error"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("unsupported model"));
 }
 
 // ─── Auth edge cases ─────────────────────────────────────────────────

@@ -82,8 +82,6 @@ pub fn find_model() -> Result<PathBuf> {
 /// Download model from a URL to the cache directory.
 #[cfg(feature = "download")]
 pub async fn download_model(base_url: &str, version: &str) -> Result<PathBuf> {
-    use std::io::Write;
-
     let cache_dir = dirs::cache_dir()
         .unwrap_or_else(|| PathBuf::from(".cache"))
         .join("prompt-compress")
