@@ -5,7 +5,8 @@ Use the included scripts to compress prompts before or during `codex` runs.
 Script paths:
 
 - `scripts/codex-compress`
-- `scripts/codex-proxy`
+- `scripts/codex-chat-compress`
+- `scripts/codex-proxy` (compatibility shim)
 
 Example with stdin:
 
@@ -33,12 +34,12 @@ This prompts for an initial message, compresses it, then launches interactive `c
 Per-turn interactive launch (recommended):
 
 ```bash
-./scripts/codex-proxy
+./scripts/codex-chat-compress
 ```
 
-This launcher starts `compress-api` locally if needed, routes Codex through the
-proxy using `chatgpt_base_url`, and evaluates every non-empty prompt block for
-compression during the session.
+This wrapper runs a local prompt loop and sends each turn through `codex exec`
+or `codex exec resume`. It tracks the active Codex thread for the current
+directory and compresses each prompt before sending it.
 
 Recommended environment:
 
@@ -47,27 +48,26 @@ export PROMPT_COMPRESS_AGGRESSIVENESS=0.4
 export PROMPT_COMPRESS_USE_ONNX=0
 export PROMPT_COMPRESS_MODEL="$PWD/models"
 export PROMPT_COMPRESS_BIN="$PWD/target/release/compress"
-export PROMPT_COMPRESS_INTERACTIVE_FIRST_PROMPT=1
-export COMPRESS_PROXY_AGGRESSIVENESS=0.4
-export COMPRESS_PROXY_MIN_CHARS=0
-export COMPRESS_PROXY_ONLY_IF_SMALLER=1
+export PROMPT_COMPRESS_CODEX_BIN="/absolute/path/to/real/codex"
 ```
 
 Optional alias:
 
 ```bash
-alias codex="$PWD/scripts/codex-proxy"
+alias codex="$PWD/scripts/codex-chat-compress"
+alias codex-native="/opt/homebrew/bin/codex"
 alias codex-oneshot="$PWD/scripts/codex-compress"
 ```
 
 Notes:
 
 - `scripts/codex-compress` only affects the initial message.
-- `scripts/codex-proxy` handles follow-up turns too.
-- Savings are logged to `/tmp/prompt-compress-proxy.log`, for example:
+- `scripts/codex-chat-compress` handles follow-up turns too.
+- Native interactive Codex does not currently honor the proxy hook for real turn traffic on ChatGPT-plan builds, so the `codex exec` wrapper is the reliable path.
+- Savings are logged to `/tmp/prompt-compress-codex-chat.log`, for example:
 
 ```text
-proxy stats path=responses attempted_blocks=2 rewritten_blocks=1 tokens=128 -> 91 saved=37 ratio=28.9%
+2026-03-06T02:34:12Z codex-chat stats cwd=/Users/devgwardo/prompt-compress session=019... original=1280 compressed=914 sent=914 saved=366 ratio=28.6% rewritten=1
 ```
 
-See also: https://github.com/DevvGwardo/prompt-compress#codex-integration-auto-compress-prompts
+See also: https://github.com/DevvGwardo/prompt-compress#codex-integration

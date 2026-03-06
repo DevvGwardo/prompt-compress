@@ -36,9 +36,9 @@ Check:
 
 For ChatGPT-plan Codex:
 
-- prefer `scripts/codex-proxy` over `scripts/codex-compress`
-- the launcher should route Codex via `chatgpt_base_url`, not `OPENAI_BASE_URL`
-- upstream should be `https://chatgpt.com/backend-api`
+- the HTTP proxy path is not reliable for native interactive turns
+- use `scripts/codex-chat-compress` for deterministic per-turn compression
+- use `scripts/codex-proxy` only as a compatibility shim to the chat wrapper
 
 ## Compression not reducing tokens
 
@@ -50,23 +50,25 @@ For ChatGPT-plan Codex:
 
 Check:
 
-- your shell alias points to `scripts/codex-compress`
+- your shell alias points to `scripts/codex-chat-compress`
 - `PROMPT_COMPRESS_BIN` points to a valid `compress` binary
-- for plain `codex` launches, provide the initial prompt in the wrapper prompt
-- set `PROMPT_COMPRESS_INTERACTIVE_FIRST_PROMPT=1` to enable the initial prompt flow
+- finish the prompt with `/send`
+- look for wrapper output like `[prompt-compress] tokens 1280 -> 914 saved=366 (28.6%) rewritten`
 
 Note:
 
-- interactive Codex follow-up turns are currently not rewritten by this wrapper
+- the wrapper only sends the compressed text when it is smaller than the original
+- use `/status` to verify a Codex thread is being tracked
+- use `/new` to force the next prompt into a fresh thread
 
-## Codex proxy stats are missing
+## Codex savings log is missing
 
 Check:
 
-- your shell alias points to `scripts/codex-proxy`
-- `compress-api` was restarted after updates (`pkill -f compress-api || true`)
-- watch `/tmp/prompt-compress-proxy.log`
-- prompts may be evaluated but not rewritten if `onlyIfSmaller=true` and token count does not improve
+- your shell alias points to `scripts/codex-chat-compress`
+- you launched `codex-native` instead of `codex`
+- at least one prompt has been sent with `/send`
+- watch `/tmp/prompt-compress-codex-chat.log`
 
 ## Need API mode instead of CLI
 

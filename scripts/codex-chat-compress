@@ -1,0 +1,353 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+STATE_DB="${PROMPT_COMPRESS_CODEX_STATE_DB:-${HOME}/.codex/state_5.sqlite}"
+STATE_DIR="${PROMPT_COMPRESS_CHAT_STATE_DIR:-${HOME}/.codex/tmp/prompt-compress-chat}"
+LOG_FILE="${PROMPT_COMPRESS_CHAT_LOG:-/tmp/prompt-compress-codex-chat.log}"
+
+usage() {
+  cat <<'EOF'
+Compressed Codex chat wrapper.
+
+Default behavior:
+  - no args: start a prompt-compressed chat loop backed by `codex exec`
+  - args: pass through directly to the real `codex` binary unchanged
+
+Chat commands:
+  /send    Send the buffered prompt
+  /new     Start a new Codex thread for this directory
+  /status  Show the current tracked Codex thread
+  /native  Launch the native Codex TUI unchanged
+  /help    Show this help
+  /quit    Exit the wrapper
+
+Prompt entry:
+  - Finish a prompt with a line containing only `/send`
+  - Multi-line pastes are supported
+
+Environment defaults:
+  PROMPT_COMPRESS_AGGRESSIVENESS
+  PROMPT_COMPRESS_TARGET_MODEL
+  PROMPT_COMPRESS_USE_ONNX
+  PROMPT_COMPRESS_MODEL
+  PROMPT_COMPRESS_BIN
+  PROMPT_COMPRESS_CODEX_BIN
+  PROMPT_COMPRESS_CODEX_STATE_DB
+  PROMPT_COMPRESS_CHAT_STATE_DIR
+  PROMPT_COMPRESS_CHAT_LOG
+EOF
+}
+
+to_bool() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+resolve_codex_cmd() {
+  if [[ -n "${PROMPT_COMPRESS_CODEX_BIN:-}" ]]; then
+    if [[ -x "${PROMPT_COMPRESS_CODEX_BIN}" ]]; then
+      echo "${PROMPT_COMPRESS_CODEX_BIN}"
+      return 0
+    fi
+    echo "error: PROMPT_COMPRESS_CODEX_BIN is set but not executable: ${PROMPT_COMPRESS_CODEX_BIN}" >&2
+    exit 1
+  fi
+
+  local script_path
+  script_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")"
+
+  local candidate
+  candidate="$(command -v codex || true)"
+  if [[ -n "$candidate" && "$candidate" != "$script_path" ]]; then
+    echo "$candidate"
+    return 0
+  fi
+
+  while IFS= read -r candidate; do
+    [[ -z "$candidate" ]] && continue
+    [[ "$candidate" == "$script_path" ]] && continue
+    if [[ -x "$candidate" ]]; then
+      echo "$candidate"
+      return 0
+    fi
+  done < <(which -a codex 2>/dev/null || true)
+
+  if [[ -x /opt/homebrew/bin/codex ]]; then
+    echo /opt/homebrew/bin/codex
+    return 0
+  fi
+
+  echo "error: could not locate a real codex binary in PATH" >&2
+  exit 1
+}
+
+resolve_compress_cmd() {
+  if [[ -n "${PROMPT_COMPRESS_BIN:-}" ]]; then
+    if [[ -x "${PROMPT_COMPRESS_BIN}" ]]; then
+      echo "${PROMPT_COMPRESS_BIN}"
+      return 0
+    fi
+    echo "error: PROMPT_COMPRESS_BIN is set but not executable: ${PROMPT_COMPRESS_BIN}" >&2
+    exit 1
+  fi
+
+  if [[ -x "${PROJECT_DIR}/target/release/compress" ]]; then
+    echo "${PROJECT_DIR}/target/release/compress"
+    return 0
+  fi
+
+  if command -v compress >/dev/null 2>&1; then
+    local candidate
+    candidate="$(command -v compress)"
+    if "$candidate" --help 2>&1 | grep -q "LLM prompt compression tool"; then
+      echo "$candidate"
+      return 0
+    fi
+  fi
+
+  echo "error: compress binary not found. Build first with: cd ${PROJECT_DIR} && cargo build --release" >&2
+  exit 1
+}
+
+sql_quote() {
+  printf "'%s'" "${1//\'/\'\'}"
+}
+
+state_key() {
+  printf '%s' "$PWD" | shasum -a 256 | awk '{print $1}'
+}
+
+write_session_id() {
+  mkdir -p "${STATE_DIR}"
+  printf '%s\n' "$1" > "${SESSION_FILE}"
+}
+
+clear_session_id() {
+  rm -f "${SESSION_FILE}"
+  SESSION_ID=""
+}
+
+load_session_id() {
+  if [[ -f "${SESSION_FILE}" ]]; then
+    SESSION_ID="$(tr -d '[:space:]' < "${SESSION_FILE}")"
+  else
+    SESSION_ID=""
+  fi
+}
+
+find_new_thread_id() {
+  local started_at="$1"
+  if [[ ! -f "${STATE_DB}" ]]; then
+    return 0
+  fi
+
+  sqlite3 "${STATE_DB}" \
+    "select id from threads where cwd = $(sql_quote "$PWD") and source = 'cli' and created_at >= ${started_at} order by created_at desc limit 1;"
+}
+
+log_stats() {
+  local session_id="$1"
+  local original_tokens="$2"
+  local output_tokens="$3"
+  local used_tokens="$4"
+  local rewritten="$5"
+  local saved="$6"
+  local ratio="$7"
+  local stamp
+  stamp="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+  mkdir -p "$(dirname "${LOG_FILE}")"
+  printf '%s codex-chat stats cwd=%s session=%s original=%s compressed=%s sent=%s saved=%s ratio=%s rewritten=%s\n' \
+    "${stamp}" "$PWD" "${session_id:-pending}" "${original_tokens}" "${output_tokens}" "${used_tokens}" "${saved}" "${ratio}" "${rewritten}" \
+    >> "${LOG_FILE}"
+}
+
+compress_prompt_json() {
+  local prompt="$1"
+  local -a cmd
+  cmd=(
+    "${COMPRESS_BIN}"
+    -i "${prompt}"
+    -a "${AGGRESSIVENESS}"
+    -m "${TARGET_MODEL}"
+    --format json
+  )
+
+  if (( USE_ONNX )); then
+    cmd+=(--onnx)
+  fi
+
+  if [[ -n "${MODEL_DIR}" ]]; then
+    cmd+=(--model-dir "${MODEL_DIR}")
+  fi
+
+  "${cmd[@]}"
+}
+
+send_turn() {
+  local original_prompt="$1"
+  local compress_json compressed_prompt original_tokens output_tokens used_prompt
+  local used_tokens saved rewritten ratio started_at exit_code new_session_id
+
+  compress_json="$(compress_prompt_json "${original_prompt}")"
+  compressed_prompt="$(jq -r '.output' <<< "${compress_json}")"
+  original_tokens="$(jq -r '.original_input_tokens' <<< "${compress_json}")"
+  output_tokens="$(jq -r '.output_tokens' <<< "${compress_json}")"
+
+  used_prompt="${original_prompt}"
+  used_tokens="${original_tokens}"
+  rewritten=0
+  saved=0
+
+  if [[ -n "${compressed_prompt//[[:space:]]/}" ]] && (( output_tokens < original_tokens )); then
+    used_prompt="${compressed_prompt}"
+    used_tokens="${output_tokens}"
+    rewritten=1
+    saved=$(( original_tokens - output_tokens ))
+  fi
+
+  ratio="$(awk -v orig="${original_tokens}" -v sent="${used_tokens}" 'BEGIN { if (orig <= 0) { printf "0.0%%" } else { printf "%.1f%%", ((orig - sent) / orig) * 100 } }')"
+
+  printf '[prompt-compress] tokens %s -> %s saved=%s (%s)%s\n' \
+    "${original_tokens}" "${used_tokens}" "${saved}" "${ratio}" \
+    "$( (( rewritten == 1 )) && printf ' rewritten' || printf ' kept-original')" >&2
+
+  started_at="$(date +%s)"
+  log_stats "${SESSION_ID}" "${original_tokens}" "${output_tokens}" "${used_tokens}" "${rewritten}" "${saved}" "${ratio}"
+
+  set +e
+  if [[ -n "${SESSION_ID}" ]]; then
+    "${CODEX_BIN}" exec resume --skip-git-repo-check "${SESSION_ID}" "${used_prompt}"
+  else
+    "${CODEX_BIN}" exec --skip-git-repo-check "${used_prompt}"
+  fi
+  exit_code=$?
+  set -e
+
+  if [[ -z "${SESSION_ID}" ]]; then
+    new_session_id="$(find_new_thread_id "${started_at}")"
+    if [[ -n "${new_session_id}" ]]; then
+      SESSION_ID="${new_session_id}"
+      write_session_id "${SESSION_ID}"
+      printf '[prompt-compress] tracking session %s\n' "${SESSION_ID}" >&2
+    else
+      printf '[prompt-compress] warning: could not discover the new Codex session id\n' >&2
+    fi
+  fi
+
+  return "${exit_code}"
+}
+
+print_chat_help() {
+  cat <<'EOF'
+[prompt-compress] Finish each prompt with /send
+[prompt-compress] Commands: /new /status /native /help /quit
+EOF
+}
+
+handle_chat_command() {
+  case "$1" in
+    /help)
+      print_chat_help
+      ;;
+    /status)
+      if [[ -n "${SESSION_ID}" ]]; then
+        printf '[prompt-compress] current session %s\n' "${SESSION_ID}"
+      else
+        printf '[prompt-compress] no tracked session for %s\n' "$PWD"
+      fi
+      ;;
+    /new)
+      clear_session_id
+      printf '[prompt-compress] next /send will start a new Codex thread\n'
+      ;;
+    /native)
+      exec "${CODEX_BIN}"
+      ;;
+    /quit)
+      exit 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+run_chat_loop() {
+  local -a buffer
+  local line prompt_text
+
+  buffer=()
+  print_chat_help
+  load_session_id
+  if [[ -n "${SESSION_ID}" ]]; then
+    printf '[prompt-compress] resuming tracked session %s\n' "${SESSION_ID}"
+  fi
+
+  while true; do
+    if (( ${#buffer[@]} == 0 )); then
+      printf 'prompt> '
+    else
+      printf '.....> '
+    fi
+
+    if ! IFS= read -r line; then
+      if (( ${#buffer[@]} == 0 )); then
+        printf '\n'
+        break
+      fi
+      line="/send"
+    fi
+
+    if (( ${#buffer[@]} == 0 )) && handle_chat_command "${line}"; then
+      continue
+    fi
+
+    if [[ "${line}" == "/send" ]]; then
+      if (( ${#buffer[@]} == 0 )); then
+        continue
+      fi
+
+      prompt_text="$(printf '%s\n' "${buffer[@]}")"
+      buffer=()
+      send_turn "${prompt_text}"
+      continue
+    fi
+
+    buffer+=("${line}")
+  done
+}
+
+AGGRESSIVENESS="${PROMPT_COMPRESS_AGGRESSIVENESS:-0.4}"
+TARGET_MODEL="${PROMPT_COMPRESS_TARGET_MODEL:-gpt-4}"
+USE_ONNX=0
+MODEL_DIR="${PROMPT_COMPRESS_MODEL:-}"
+
+if to_bool "${PROMPT_COMPRESS_USE_ONNX:-0}"; then
+  USE_ONNX=1
+fi
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+CODEX_BIN="$(resolve_codex_cmd)"
+COMPRESS_BIN="$(resolve_compress_cmd)"
+SESSION_FILE="${STATE_DIR}/$(state_key).session"
+
+if [[ $# -gt 0 ]]; then
+  exec "${CODEX_BIN}" "$@"
+fi
+
+if [[ ! -t 0 ]]; then
+  load_session_id
+  send_turn "$(cat)"
+  exit $?
+fi
+
+run_chat_loop
