@@ -282,12 +282,13 @@ This starts a prompt loop backed by `codex exec` and `codex exec resume`.
 Each turn is compressed locally before being sent, and the wrapper tracks the
 Codex thread id for the current working directory.
 
-Chat commands:
+Chat commands (work at any point, including mid-prompt):
 
 - `/send`: send the buffered prompt
 - `/new`: start a new Codex thread for the current directory
 - `/status`: show the tracked Codex thread id
 - `/native`: launch the native Codex TUI without compression
+- `/help`: show available commands
 - `/quit`: exit the wrapper
 
 Recommended environment defaults:
@@ -459,6 +460,8 @@ prompt-compress/
 │       └── prompt-compress/
 ├── scripts/
 │   ├── codex-compress
+│   ├── codex-chat-compress
+│   ├── codex-proxy
 │   └── publish-wiki.sh
 ├── training/
 ├── wiki/
