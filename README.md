@@ -245,6 +245,134 @@ How this works:
 - Streams upstream responses through (including streaming endpoints).
 - Fails open: if rewriting fails, original request body is still forwarded.
 
+## Claude Code Integration
+
+### Automatic (Every Prompt)
+
+A `UserPromptSubmit` hook compresses every prompt automatically when using Claude Code in this project. It's already configured in `.claude/settings.json`.
+
+To enable it in any other project, add to that project's `.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash /absolute/path/to/prompt-compress/integrations/claude-code/prompt-compress/hooks/compress-prompt.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Or install globally in `~/.claude/settings.json` for all projects.
+
+Set `PROMPT_COMPRESS_BIN` if the binary isn't at `./target/release/compress`:
+
+```bash
+export PROMPT_COMPRESS_BIN="/absolute/path/to/prompt-compress/target/release/compress"
+```
+
+The hook:
+- Fires on every prompt submission
+- Skips short prompts (< 80 chars, configurable via `PROMPT_COMPRESS_MIN_CHARS`)
+- Fails open (if compression fails, original prompt passes through)
+- Logs stats to `/tmp/prompt-compress-hook.log`
+- Uses aggressiveness 0.4 by default (configurable via `PROMPT_COMPRESS_AGGRESSIVENESS`)
+
+A standalone plugin is also available at `integrations/claude-code/prompt-compress/` for use with `--plugin-dir`.
+
+### Manual Wrappers
+
+Two Claude Code entrypoints are included:
+
+- `scripts/claude-compress`: one-shot wrapper that compresses a prompt before launching `claude -p`
+- `scripts/claude-chat-compress`: per-turn chat wrapper that compresses every prompt before sending it to Claude Code
+
+```bash
+chmod +x scripts/claude-compress scripts/claude-chat-compress
+```
+
+Stdin flow:
+
+```bash
+echo "Review this Rust module for correctness and performance issues" \
+  | ./scripts/claude-compress
+```
+
+Explicit prompt flow:
+
+```bash
+./scripts/claude-compress \
+  --prompt "Draft a migration plan for this repository" \
+  -- --model sonnet
+```
+
+Per-turn interactive launch (recommended):
+
+```bash
+./scripts/claude-chat-compress
+```
+
+This starts a prompt loop backed by `claude -p` (print mode).
+Each turn is compressed locally before being sent.
+
+Chat commands (same as Codex wrapper):
+
+- `/send`: send the buffered prompt
+- `/new`: start a new Claude Code session
+- `/status`: show the tracked session id
+- `/native`: launch the native Claude Code TUI without compression
+- `/help`: show available commands
+- `/quit`: exit the wrapper
+
+Pipe directly (no wrapper needed):
+
+```bash
+echo "Explain this codebase in detail with architecture diagrams" \
+  | ./target/release/compress -a 0.4 \
+  | claude -p
+```
+
+Recommended environment defaults:
+
+```bash
+export PROMPT_COMPRESS_AGGRESSIVENESS=0.4
+export PROMPT_COMPRESS_USE_ONNX=0
+export PROMPT_COMPRESS_MODEL="$PWD/models"
+export PROMPT_COMPRESS_BIN="$PWD/target/release/compress"
+export PROMPT_COMPRESS_CLAUDE_BIN="/opt/homebrew/bin/claude"
+```
+
+Optional alias:
+
+```bash
+alias claudexp="$PWD/scripts/claude-compress"
+alias claude-chat="$PWD/scripts/claude-chat-compress"
+```
+
+The API proxy also supports Anthropic Messages API format (`/v1/proxy/messages`),
+so you can point Claude Code at the gateway for transparent per-request compression:
+
+```bash
+COMPRESS_PROXY_UPSTREAM_BASE_URL="https://api.anthropic.com/v1" \
+COMPRESS_PROXY_UPSTREAM_API_KEY="sk-ant-your-key" \
+cargo run --release -p compress-api
+```
+
+Per-turn savings are logged to `/tmp/prompt-compress-claude-chat.log`:
+
+```bash
+tail -n 40 /tmp/prompt-compress-claude-chat.log
+```
+
 ## Codex Integration
 
 Three Codex entrypoints are included:
@@ -456,9 +584,13 @@ prompt-compress/
 │   ├── compress-cli/
 │   └── compress-api/
 ├── integrations/
+│   ├── claude-code/
+│   │   └── prompt-compress/    (UserPromptSubmit hook plugin)
 │   └── openclaw/
 │       └── prompt-compress/
 ├── scripts/
+│   ├── claude-compress
+│   ├── claude-chat-compress
 │   ├── codex-compress
 │   ├── codex-chat-compress
 │   ├── codex-proxy

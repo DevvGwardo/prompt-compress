@@ -313,16 +313,182 @@ fn compress_responses_payload(
     stats
 }
 
+fn compress_codex_message_array(
+    state: &AppState,
+    cfg: &ProxyConfig,
+    messages: &mut Vec<Value>,
+    stats: &mut RewriteStats,
+) {
+    for message in messages {
+        let Some(obj) = message.as_object_mut() else {
+            continue;
+        };
+
+        let role = obj.get("role").and_then(Value::as_str).unwrap_or_default();
+        if role != "user" {
+            continue;
+        }
+
+        if let Some(content) = obj.get_mut("content") {
+            if let Some(text) = content.as_str() {
+                if let Some(attempt) = compress_text(state, cfg, text) {
+                    let rewritten = should_rewrite_text(cfg, text, &attempt);
+                    stats.record(
+                        attempt.original_input_tokens,
+                        attempt.output_tokens,
+                        rewritten,
+                    );
+                    if rewritten {
+                        *content = Value::String(attempt.output);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn compress_codex_backend_payload(
+    state: &AppState,
+    cfg: &ProxyConfig,
+    payload: &mut Value,
+) -> RewriteStats {
+    let mut stats = RewriteStats::default();
+
+    if let Some(prompt) = payload.get_mut("prompt") {
+        if let Some(text) = prompt.as_str() {
+            if let Some(attempt) = compress_text(state, cfg, text) {
+                let rewritten = should_rewrite_text(cfg, text, &attempt);
+                stats.record(
+                    attempt.original_input_tokens,
+                    attempt.output_tokens,
+                    rewritten,
+                );
+                if rewritten {
+                    *prompt = Value::String(attempt.output);
+                }
+            }
+        }
+    }
+
+    if let Some(messages) = payload.get_mut("messages").and_then(Value::as_array_mut) {
+        compress_codex_message_array(state, cfg, messages, &mut stats);
+    }
+
+    if let Some(messages) = payload
+        .get_mut("initial_messages")
+        .and_then(Value::as_array_mut)
+    {
+        compress_codex_message_array(state, cfg, messages, &mut stats);
+    }
+
+    stats
+}
+
+fn is_chat_completions_path(path: &str) -> bool {
+    path == "chat/completions" || path.ends_with("/chat/completions")
+}
+
+fn is_responses_path(path: &str) -> bool {
+    path == "responses" || path.ends_with("/responses")
+}
+
+fn is_anthropic_messages_path(path: &str) -> bool {
+    path == "messages" || path.ends_with("/messages")
+}
+
+/// Compress Anthropic Messages API payloads.
+/// Format: { "messages": [{"role": "user", "content": "..."}] }
+/// Content can be a string or an array of content blocks like [{"type": "text", "text": "..."}].
+fn compress_anthropic_messages_payload(
+    state: &AppState,
+    cfg: &ProxyConfig,
+    payload: &mut Value,
+) -> RewriteStats {
+    let mut stats = RewriteStats::default();
+    let Some(messages) = payload.get_mut("messages").and_then(Value::as_array_mut) else {
+        return stats;
+    };
+
+    for message in messages {
+        let Some(obj) = message.as_object_mut() else {
+            continue;
+        };
+
+        let role = obj.get("role").and_then(Value::as_str).unwrap_or_default();
+        if role != "user" {
+            continue;
+        }
+
+        if let Some(content) = obj.get_mut("content") {
+            // String content: {"role": "user", "content": "text here"}
+            if let Some(text) = content.as_str() {
+                if let Some(attempt) = compress_text(state, cfg, text) {
+                    let rewritten = should_rewrite_text(cfg, text, &attempt);
+                    stats.record(
+                        attempt.original_input_tokens,
+                        attempt.output_tokens,
+                        rewritten,
+                    );
+                    if rewritten {
+                        *content = Value::String(attempt.output);
+                    }
+                }
+                continue;
+            }
+
+            // Array content: {"role": "user", "content": [{"type": "text", "text": "..."}]}
+            if let Some(parts) = content.as_array_mut() {
+                for part in parts {
+                    let Some(part_obj) = part.as_object_mut() else {
+                        continue;
+                    };
+                    let part_type = part_obj
+                        .get("type")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    if part_type != "text" {
+                        continue;
+                    }
+                    if let Some(text_val) = part_obj.get_mut("text") {
+                        if let Some(text) = text_val.as_str() {
+                            if let Some(attempt) = compress_text(state, cfg, text) {
+                                let rewritten = should_rewrite_text(cfg, text, &attempt);
+                                stats.record(
+                                    attempt.original_input_tokens,
+                                    attempt.output_tokens,
+                                    rewritten,
+                                );
+                                if rewritten {
+                                    *text_val = Value::String(attempt.output);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    stats
+}
+
 fn rewrite_proxy_payload(state: &AppState, path: &str, body: &[u8]) -> Option<Vec<u8>> {
     let cfg = state.proxy.as_ref()?;
     let mut payload: Value = serde_json::from_slice(body).ok()?;
-    let stats = match path {
-        "chat/completions" => compress_chat_completions_payload(state, cfg, &mut payload),
-        "responses" => compress_responses_payload(state, cfg, &mut payload),
-        _ => RewriteStats::default(),
+    let stats = if path.contains("api/codex") {
+        compress_codex_backend_payload(state, cfg, &mut payload)
+    } else if is_chat_completions_path(path) {
+        compress_chat_completions_payload(state, cfg, &mut payload)
+    } else if is_responses_path(path) {
+        compress_responses_payload(state, cfg, &mut payload)
+    } else if is_anthropic_messages_path(path) {
+        compress_anthropic_messages_payload(state, cfg, &mut payload)
+    } else {
+        RewriteStats::default()
     };
 
     if stats.attempted_blocks == 0 {
+        tracing::info!("proxy saw JSON request with no rewriteable text blocks for path {}", path);
         return None;
     }
 
@@ -388,6 +554,16 @@ pub async fn proxy(
     let method = req.method().clone();
     let uri = req.uri().clone();
     let headers = req.headers().clone();
+    let content_type = headers
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    tracing::info!(
+        "proxy request method={} path={} content-type={}",
+        method.as_str(),
+        path,
+        content_type
+    );
     let body = to_bytes(req.into_body(), 50 * 1024 * 1024)
         .await
         .map_err(|e| bad_request(format!("failed to read request body: {e}")))?;
@@ -566,6 +742,134 @@ mod tests {
         );
     }
 
+    #[test]
+    fn rewrites_anthropic_messages_string_content() {
+        let state = test_state("http://localhost:1234");
+        let payload = json!({
+            "model": "claude-sonnet-4-20250514",
+            "max_tokens": 1024,
+            "messages": [
+                {"role": "user", "content": "Please provide a detailed migration plan with rollback and validation steps."}
+            ]
+        });
+
+        let out = super::rewrite_proxy_payload(
+            &state,
+            "messages",
+            serde_json::to_vec(&payload).expect("serialize").as_slice(),
+        )
+        .expect("payload should be rewritten");
+
+        let rewritten: serde_json::Value = serde_json::from_slice(&out).expect("json");
+        let user_content = rewritten["messages"][0]["content"]
+            .as_str()
+            .expect("user content");
+
+        assert_ne!(
+            user_content,
+            payload["messages"][0]["content"]
+                .as_str()
+                .expect("orig user")
+        );
+    }
+
+    #[test]
+    fn rewrites_anthropic_messages_array_content() {
+        let state = test_state("http://localhost:1234");
+        let payload = json!({
+            "model": "claude-sonnet-4-20250514",
+            "max_tokens": 1024,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Draft a weekly status update and include risks and blockers."}
+                    ]
+                }
+            ]
+        });
+
+        let out = super::rewrite_proxy_payload(
+            &state,
+            "v1/messages",
+            serde_json::to_vec(&payload).expect("serialize").as_slice(),
+        )
+        .expect("payload should be rewritten");
+
+        let rewritten: serde_json::Value = serde_json::from_slice(&out).expect("json");
+        let text = rewritten["messages"][0]["content"][0]["text"]
+            .as_str()
+            .expect("rewritten text");
+        assert_ne!(
+            text,
+            payload["messages"][0]["content"][0]["text"]
+                .as_str()
+                .expect("orig text")
+        );
+    }
+
+    #[test]
+    fn skips_anthropic_messages_assistant_role() {
+        let state = test_state("http://localhost:1234");
+        let payload = json!({
+            "model": "claude-sonnet-4-20250514",
+            "max_tokens": 1024,
+            "messages": [
+                {"role": "user", "content": "Please provide a detailed migration plan with rollback and validation steps."},
+                {"role": "assistant", "content": "Here is the plan."}
+            ]
+        });
+
+        let out = super::rewrite_proxy_payload(
+            &state,
+            "messages",
+            serde_json::to_vec(&payload).expect("serialize").as_slice(),
+        )
+        .expect("payload should be rewritten");
+
+        let rewritten: serde_json::Value = serde_json::from_slice(&out).expect("json");
+        let assistant_content = rewritten["messages"][1]["content"]
+            .as_str()
+            .expect("assistant content");
+        assert_eq!(assistant_content, "Here is the plan.");
+    }
+
+    #[test]
+    fn rewrites_codex_responses_path_like_standard_responses() {
+        let state = test_state("http://localhost:1234");
+        let payload = json!({
+            "model": "gpt-5.4",
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "Write a large PRD with requirements, rollout phases, and edge cases."}
+                    ]
+                }
+            ],
+            "stream": true
+        });
+
+        let out = super::rewrite_proxy_payload(
+            &state,
+            "codex/responses",
+            serde_json::to_vec(&payload).expect("serialize").as_slice(),
+        )
+        .expect("payload should be rewritten");
+
+        let rewritten: serde_json::Value = serde_json::from_slice(&out).expect("json");
+        let text = rewritten["input"][0]["content"][0]["text"]
+            .as_str()
+            .expect("rewritten text");
+        assert_ne!(
+            text,
+            payload["input"][0]["content"][0]["text"]
+                .as_str()
+                .expect("orig text")
+        );
+    }
+
     async fn echo_body(req: Request) -> impl IntoResponse {
         let body = req.into_body();
         (StatusCode::OK, body)
@@ -605,6 +909,52 @@ mod tests {
         response.assert_status_ok();
         let body: serde_json::Value = response.json();
         let forwarded = body["messages"][0]["content"]
+            .as_str()
+            .expect("forwarded text");
+
+        assert_ne!(forwarded, original);
+    }
+
+    #[tokio::test]
+    async fn proxy_route_rewrites_and_forwards_codex_responses_payload() {
+        let upstream = Router::new().route("/codex/responses", routing::post(echo_body));
+        let upstream_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind upstream");
+        let upstream_addr = upstream_listener.local_addr().expect("upstream addr");
+        tokio::spawn(async move {
+            axum::serve(upstream_listener, upstream)
+                .await
+                .expect("serve upstream");
+        });
+
+        let state = test_state(&format!("http://{}", upstream_addr));
+        let app = Router::new()
+            .route("/v1/proxy/{*path}", routing::any(super::proxy))
+            .with_state(state);
+        let server = TestServer::new(app);
+
+        let original = "Please write a comprehensive PRD with detailed milestones, constraints, and risks.";
+        let response = server
+            .post("/v1/proxy/codex/responses")
+            .json(&json!({
+                "model": "gpt-5.4",
+                "input": [
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": original}
+                        ]
+                    }
+                ],
+                "stream": true
+            }))
+            .await;
+
+        response.assert_status_ok();
+        let body: serde_json::Value = response.json();
+        let forwarded = body["input"][0]["content"][0]["text"]
             .as_str()
             .expect("forwarded text");
 

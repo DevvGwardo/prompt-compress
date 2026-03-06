@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PROJECT_DIR}/integrations/claude-code/prompt-compress/hooks/compress-prompt.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

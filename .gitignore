@@ -8,3 +8,5 @@ models/onnx_quantized/
 training/output/
 training/__pycache__/
 .env
+.claude/settings.local.json
+training/venv/

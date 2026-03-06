@@ -2,7 +2,7 @@
 fn onnx_scorer_rejects_missing_model() {
     let result = compress_core::model::OnnxScorer::load(
         "/nonexistent/model.onnx",
-        "/nonexistent/tokenizer.json"
+        "/nonexistent/tokenizer.json",
     );
     assert!(result.is_err());
     let err = result.err().unwrap();
@@ -34,7 +34,7 @@ fn onnx_scorer_with_real_file_but_not_onnx() {
 
     let result = compress_core::model::OnnxScorer::load(
         tmp_model.to_str().unwrap(),
-        tmp_tokenizer.to_str().unwrap()
+        tmp_tokenizer.to_str().unwrap(),
     );
     // This will fail because the files aren't valid - tokenizer.json is empty
     // and model.onnx is not a valid ONNX file

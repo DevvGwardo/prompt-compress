@@ -81,7 +81,10 @@ fn result_roundtrips_through_json() {
 
     assert_eq!(deserialized.output, original.output);
     assert_eq!(deserialized.output_tokens, original.output_tokens);
-    assert_eq!(deserialized.original_input_tokens, original.original_input_tokens);
+    assert_eq!(
+        deserialized.original_input_tokens,
+        original.original_input_tokens
+    );
     assert_eq!(deserialized.compression_ratio, original.compression_ratio);
 }
 

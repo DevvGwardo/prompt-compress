@@ -86,8 +86,10 @@ fn main() -> Result<()> {
             Some(dir) => dir,
             None => find_model()?.to_string_lossy().to_string(),
         };
-        let scorer = OnnxScorer::load(&format!("{}/model.onnx", model_dir), 
-                                      &format!("{}/tokenizer.json", model_dir))?;
+        let scorer = OnnxScorer::load(
+            &format!("{}/model.onnx", model_dir),
+            &format!("{}/tokenizer.json", model_dir),
+        )?;
         Compressor::new(Box::new(scorer), &args.target_model)?
     } else {
         let scorer = HeuristicScorer::new();
