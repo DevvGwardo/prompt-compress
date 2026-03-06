@@ -26,19 +26,17 @@ impl HeuristicScorer {
     pub fn new() -> Self {
         Self {
             stop_words: vec![
-                "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
-                "have", "has", "had", "do", "does", "did", "will", "would", "could",
-                "should", "may", "might", "shall", "can", "need", "dare", "ought",
-                "used", "to", "of", "in", "for", "on", "with", "at", "by", "from",
-                "as", "into", "through", "during", "before", "after", "above", "below",
-                "between", "out", "off", "over", "under", "again", "further", "then",
-                "once", "here", "there", "when", "where", "why", "how", "all", "both",
-                "each", "few", "more", "most", "other", "some", "such", "no", "nor",
-                "not", "only", "own", "same", "so", "than", "too", "very", "just",
-                "because", "but", "and", "or", "if", "while", "about", "up", "that",
-                "this", "these", "those", "it", "its", "i", "me", "my", "we", "our",
-                "you", "your", "he", "him", "his", "she", "her", "they", "them", "their",
-                "what", "which", "who", "whom", "also", "still", "already", "yet",
+                "a", "an", "the", "is", "are", "was", "were", "be", "been", "being", "have", "has",
+                "had", "do", "does", "did", "will", "would", "could", "should", "may", "might",
+                "shall", "can", "need", "dare", "ought", "used", "to", "of", "in", "for", "on",
+                "with", "at", "by", "from", "as", "into", "through", "during", "before", "after",
+                "above", "below", "between", "out", "off", "over", "under", "again", "further",
+                "then", "once", "here", "there", "when", "where", "why", "how", "all", "both",
+                "each", "few", "more", "most", "other", "some", "such", "no", "nor", "not", "only",
+                "own", "same", "so", "than", "too", "very", "just", "because", "but", "and", "or",
+                "if", "while", "about", "up", "that", "this", "these", "those", "it", "its", "i",
+                "me", "my", "we", "our", "you", "your", "he", "him", "his", "she", "her", "they",
+                "them", "their", "what", "which", "who", "whom", "also", "still", "already", "yet",
             ],
         }
     }
@@ -57,7 +55,10 @@ impl HeuristicScorer {
         }
 
         // Numbers are moderately important (often data)
-        if word.chars().all(|c| c.is_ascii_digit() || c == '.' || c == ',') {
+        if word
+            .chars()
+            .all(|c| c.is_ascii_digit() || c == '.' || c == ',')
+        {
             return 0.8;
         }
 
@@ -119,14 +120,22 @@ mod tests {
     #[test]
     fn test_stop_words_score_low() {
         let scorer = HeuristicScorer::new();
-        let tokens = scorer.score("the quick brown fox jumps over the lazy dog").unwrap();
+        let tokens = scorer
+            .score("the quick brown fox jumps over the lazy dog")
+            .unwrap();
 
         let the_score = tokens.iter().find(|t| t.text == "the").unwrap().importance;
         let fox_score = tokens.iter().find(|t| t.text == "fox").unwrap().importance;
         let over_score = tokens.iter().find(|t| t.text == "over").unwrap().importance;
 
-        assert!(the_score < fox_score, "stop word 'the' should score lower than 'fox'");
-        assert!(over_score < fox_score, "stop word 'over' should score lower than 'fox'");
+        assert!(
+            the_score < fox_score,
+            "stop word 'the' should score lower than 'fox'"
+        );
+        assert!(
+            over_score < fox_score,
+            "stop word 'over' should score lower than 'fox'"
+        );
     }
 
     #[test]
@@ -137,7 +146,10 @@ mod tests {
         let john_score = tokens.iter().find(|t| t.text == "John").unwrap().importance;
         let home_score = tokens.iter().find(|t| t.text == "home").unwrap().importance;
 
-        assert!(john_score > home_score, "proper noun 'John' should score higher");
+        assert!(
+            john_score > home_score,
+            "proper noun 'John' should score higher"
+        );
     }
 
     #[test]

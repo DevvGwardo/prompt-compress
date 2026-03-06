@@ -8,8 +8,18 @@ fn new_and_default_are_equivalent() {
     let b = HeuristicScorer::default();
     // Both should score the same text identically
     let text = "the quick brown fox";
-    let sa: Vec<f32> = a.score(text).unwrap().iter().map(|t| t.importance).collect();
-    let sb: Vec<f32> = b.score(text).unwrap().iter().map(|t| t.importance).collect();
+    let sa: Vec<f32> = a
+        .score(text)
+        .unwrap()
+        .iter()
+        .map(|t| t.importance)
+        .collect();
+    let sb: Vec<f32> = b
+        .score(text)
+        .unwrap()
+        .iter()
+        .map(|t| t.importance)
+        .collect();
     assert_eq!(sa, sb);
 }
 
@@ -18,7 +28,9 @@ fn new_and_default_are_equivalent() {
 #[test]
 fn all_common_stop_words_score_low() {
     let scorer = HeuristicScorer::new();
-    let stop_words = ["the", "is", "are", "was", "of", "in", "for", "and", "or", "but", "to", "a", "an"];
+    let stop_words = [
+        "the", "is", "are", "was", "of", "in", "for", "and", "or", "but", "to", "a", "an",
+    ];
 
     for word in stop_words {
         let tokens = scorer.score(word).unwrap();
@@ -197,7 +209,11 @@ fn mixed_content_ordering() {
 
     let the_score = tokens.iter().find(|t| t.text == "the").unwrap().importance;
     let api_score = tokens.iter().find(|t| t.text == "API").unwrap().importance;
-    let num_score = tokens.iter().find(|t| t.text == "42.99").unwrap().importance;
+    let num_score = tokens
+        .iter()
+        .find(|t| t.text == "42.99")
+        .unwrap()
+        .importance;
 
     // API (ALL CAPS) > numbers > stop words
     assert!(api_score > num_score);
@@ -211,7 +227,11 @@ fn unicode_words_get_default_score() {
     assert_eq!(tokens.len(), 3);
     // Non-ASCII words should still get scored (won't match stop words)
     for t in &tokens {
-        assert!(t.importance > 0.0, "unicode word '{}' should have positive score", t.text);
+        assert!(
+            t.importance > 0.0,
+            "unicode word '{}' should have positive score",
+            t.text
+        );
     }
 }
 

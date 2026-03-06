@@ -1,5 +1,5 @@
 {
-  "name": "@prompt-compress/openclaw-plugin",
+  "name": "prompt-compress",
   "version": "0.1.0",
   "private": true,
   "description": "OpenClaw prompt compression plugin powered by prompt-compress CLI",
