@@ -2,91 +2,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-API_BIN="${PROMPT_COMPRESS_API_BIN:-${PROJECT_DIR}/target/release/compress-api}"
-CODEX_BIN="${PROMPT_COMPRESS_CODEX_BIN:-/opt/homebrew/bin/codex}"
-HOST="${PROMPT_COMPRESS_PROXY_HOST:-127.0.0.1}"
-PORT="${PROMPT_COMPRESS_PROXY_PORT:-3000}"
-HEALTH_URL="http://${HOST}:${PORT}/health"
-LOG_FILE="${PROMPT_COMPRESS_PROXY_LOG:-/tmp/prompt-compress-proxy.log}"
-PROXY_BASE_URL="http://${HOST}:${PORT}/v1/proxy"
-UPSTREAM_BASE_URL="${PROMPT_COMPRESS_UPSTREAM_BASE_URL:-https://chatgpt.com/backend-api}"
 
-usage() {
-  cat <<'EOF'
-Launch Codex through the local prompt-compress proxy.
-
-The launcher:
-  1) ensures the local proxy is running
-  2) points Codex's ChatGPT Codex backend at the proxy with `chatgpt_base_url`
-  3) execs the real `codex` binary
-
-Environment overrides:
-  PROMPT_COMPRESS_API_BIN
-  PROMPT_COMPRESS_CODEX_BIN
-  PROMPT_COMPRESS_PROXY_HOST
-  PROMPT_COMPRESS_PROXY_PORT
-  PROMPT_COMPRESS_PROXY_LOG
-  PROMPT_COMPRESS_UPSTREAM_BASE_URL
-  COMPRESS_PROXY_AGGRESSIVENESS
-  COMPRESS_PROXY_TARGET_MODEL
-  COMPRESS_PROXY_MIN_CHARS
-  COMPRESS_PROXY_ONLY_IF_SMALLER
+cat >&2 <<'EOF'
+[prompt-compress] scripts/codex-proxy is deprecated for native interactive Codex.
+[prompt-compress] Current Codex CLI builds bypass the HTTP proxy path for real turns.
+[prompt-compress] Starting the working codex-chat-compress wrapper instead.
 EOF
-}
 
-if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-  usage
-  echo
-  exec "${CODEX_BIN}" --help
-fi
-
-if [[ ! -x "${API_BIN}" ]]; then
-  echo "error: compress-api binary not found: ${API_BIN}" >&2
-  echo "build it with: cd ${PROJECT_DIR} && cargo build --release" >&2
-  exit 1
-fi
-
-if [[ ! -x "${CODEX_BIN}" ]]; then
-  echo "error: codex binary not found: ${CODEX_BIN}" >&2
-  exit 1
-fi
-
-proxy_healthy() {
-  curl -fsS --max-time 1 "${HEALTH_URL}" >/dev/null 2>&1
-}
-
-start_proxy() {
-  mkdir -p "$(dirname "${LOG_FILE}")"
-  (
-    export COMPRESS_API_HOST="${HOST}"
-    export PORT="${PORT}"
-    export COMPRESS_PROXY_UPSTREAM_BASE_URL="${UPSTREAM_BASE_URL}"
-    if [[ -n "${COMPRESS_PROXY_UPSTREAM_API_KEY:-}" ]]; then
-      export COMPRESS_PROXY_UPSTREAM_API_KEY
-    fi
-    export COMPRESS_PROXY_AGGRESSIVENESS="${COMPRESS_PROXY_AGGRESSIVENESS:-0.4}"
-    export COMPRESS_PROXY_TARGET_MODEL="${COMPRESS_PROXY_TARGET_MODEL:-gpt-4}"
-    export COMPRESS_PROXY_MIN_CHARS="${COMPRESS_PROXY_MIN_CHARS:-0}"
-    export COMPRESS_PROXY_ONLY_IF_SMALLER="${COMPRESS_PROXY_ONLY_IF_SMALLER:-1}"
-    nohup "${API_BIN}" >>"${LOG_FILE}" 2>&1 &
-  )
-}
-
-if ! proxy_healthy; then
-  start_proxy
-  for _ in {1..30}; do
-    if proxy_healthy; then
-      break
-    fi
-    sleep 0.2
-  done
-fi
-
-if ! proxy_healthy; then
-  echo "error: prompt-compress proxy did not become healthy at ${HEALTH_URL}" >&2
-  echo "see log: ${LOG_FILE}" >&2
-  exit 1
-fi
-
-exec "${CODEX_BIN}" -c "chatgpt_base_url=\"${PROXY_BASE_URL}\"" "$@"
+exec "${SCRIPT_DIR}/codex-chat-compress" "$@"

@@ -16,6 +16,7 @@ It includes:
 - `compress` (CLI): local and pipeline usage
 - `compress-api`: HTTP service
 - `scripts/codex-compress`: Codex wrapper with pre-send compression
+- `scripts/codex-chat-compress`: per-turn Codex chat wrapper
 - `integrations/openclaw/prompt-compress`: OpenClaw plugin package
 
 ## Why Use It
@@ -246,13 +247,14 @@ How this works:
 
 ## Codex Integration
 
-Two Codex entrypoints are included:
+Three Codex entrypoints are included:
 
 - `scripts/codex-compress`: one-shot wrapper that compresses an initial prompt before launching `codex`
-- `scripts/codex-proxy`: per-turn proxy launcher for interactive Codex sessions
+- `scripts/codex-chat-compress`: per-turn chat wrapper that compresses every prompt before sending it to Codex
+- `scripts/codex-proxy`: compatibility shim that forwards to `scripts/codex-chat-compress`
 
 ```bash
-chmod +x scripts/codex-compress
+chmod +x scripts/codex-compress scripts/codex-chat-compress
 ```
 
 Stdin flow:
@@ -270,22 +272,23 @@ Explicit prompt flow:
   -- exec
 ```
 
-Plain interactive launch (initial prompt compression):
+Per-turn interactive launch (recommended):
 
 ```bash
-./scripts/codex-compress
+./scripts/codex-chat-compress
 ```
 
-This prompts for one initial message, compresses it, then launches interactive `codex`.
+This starts a prompt loop backed by `codex exec` and `codex exec resume`.
+Each turn is compressed locally before being sent, and the wrapper tracks the
+Codex thread id for the current working directory.
 
-Per-turn interactive launch (recommended for ChatGPT-plan Codex auth):
+Chat commands:
 
-```bash
-./scripts/codex-proxy
-```
-
-This starts `compress-api` locally if needed, points Codex at the local proxy via
-`chatgpt_base_url`, and compresses user text blocks on every proxied turn.
+- `/send`: send the buffered prompt
+- `/new`: start a new Codex thread for the current directory
+- `/status`: show the tracked Codex thread id
+- `/native`: launch the native Codex TUI without compression
+- `/quit`: exit the wrapper
 
 Recommended environment defaults:
 
@@ -294,42 +297,33 @@ export PROMPT_COMPRESS_AGGRESSIVENESS=0.4
 export PROMPT_COMPRESS_USE_ONNX=0
 export PROMPT_COMPRESS_MODEL="$PWD/models"
 export PROMPT_COMPRESS_BIN="$PWD/target/release/compress"
-# optional: set when `codex` is aliased to this wrapper
 export PROMPT_COMPRESS_CODEX_BIN="/absolute/path/to/real/codex"
-export PROMPT_COMPRESS_INTERACTIVE_FIRST_PROMPT=1
-```
-
-Recommended per-turn proxy defaults:
-
-```bash
-export COMPRESS_PROXY_AGGRESSIVENESS=0.4
-export COMPRESS_PROXY_MIN_CHARS=0
-export COMPRESS_PROXY_ONLY_IF_SMALLER=1
 ```
 
 Optional alias:
 
 ```bash
 alias codexp="$PWD/scripts/codex-compress"
-alias codex-proxy="$PWD/scripts/codex-proxy"
-# or replace codex directly for per-turn compression:
-alias codex="$PWD/scripts/codex-proxy"
+alias codex-chat="$PWD/scripts/codex-chat-compress"
+alias codex="$PWD/scripts/codex-chat-compress"
+alias codex-native="/opt/homebrew/bin/codex"
 ```
 
 Notes:
 
-- `scripts/codex-compress` compresses the initial message only.
-- `scripts/codex-proxy` evaluates every non-empty prompt block and only rewrites when token count improves.
-- Per-request proxy logs include token savings, for example:
+- `scripts/codex-compress` affects the initial message only.
+- `scripts/codex-chat-compress` evaluates every prompt and only sends the compressed form when it is smaller.
+- Native interactive Codex currently bypasses the HTTP proxy hook for real turns on ChatGPT-plan builds, so `scripts/codex-chat-compress` is the reliable path.
+- Per-turn savings are printed by the wrapper and logged to `/tmp/prompt-compress-codex-chat.log`, for example:
 
 ```text
-proxy stats path=responses attempted_blocks=2 rewritten_blocks=1 tokens=128 -> 91 saved=37 ratio=28.9%
+2026-03-06T02:34:12Z codex-chat stats cwd=/Users/devgwardo/prompt-compress session=019... original=1280 compressed=914 sent=914 saved=366 ratio=28.6% rewritten=1
 ```
 
-- View savings live with:
+- View recent savings with:
 
 ```bash
-tail -f /tmp/prompt-compress-proxy.log
+tail -n 40 /tmp/prompt-compress-codex-chat.log
 ```
 
 ## OpenClaw Integration
