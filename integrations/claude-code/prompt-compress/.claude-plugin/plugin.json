@@ -1,0 +1,7 @@
+{
+  "name": "prompt-compress",
+  "description": "Automatically compress user prompts before they reach Claude, reducing token usage while preserving meaning. Uses the prompt-compress Rust toolkit.",
+  "author": {
+    "name": "DevvGwardo"
+  }
+}

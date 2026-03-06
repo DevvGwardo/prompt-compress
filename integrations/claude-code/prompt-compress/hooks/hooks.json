@@ -1,0 +1,17 @@
+{
+  "description": "Compress user prompts on every submission to reduce token usage",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/compress-prompt.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
