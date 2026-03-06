@@ -146,7 +146,7 @@ find_new_thread_id() {
   fi
 
   sqlite3 "${STATE_DB}" \
-    "select id from threads where cwd = $(sql_quote "$PWD") and source = 'cli' and created_at >= ${started_at} order by created_at desc limit 1;"
+    "select id from threads where cwd = $(sql_quote "$PWD") and source in ('cli','exec') and created_at >= ${started_at} order by created_at desc limit 1;"
 }
 
 log_stats() {
@@ -303,7 +303,8 @@ run_chat_loop() {
       line="/send"
     fi
 
-    if (( ${#buffer[@]} == 0 )) && handle_chat_command "${line}"; then
+    # Handle commands regardless of buffer state
+    if handle_chat_command "${line}"; then
       continue
     fi
 
@@ -315,6 +316,11 @@ run_chat_loop() {
       prompt_text="$(printf '%s\n' "${buffer[@]}")"
       buffer=()
       send_turn "${prompt_text}"
+      continue
+    fi
+
+    # Skip blank lines so an accidental Enter doesn't break the prompt
+    if [[ -z "${line}" ]]; then
       continue
     fi
 
