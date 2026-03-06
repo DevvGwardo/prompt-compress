@@ -1,5 +1,28 @@
 # Quick Start
 
+## Super Simple (Copy/Paste)
+
+Run these 3 commands:
+
+```bash
+git clone https://github.com/DevvGwardo/prompt-compress.git
+cd prompt-compress
+cargo build --release
+```
+
+Then run:
+
+```bash
+echo "Write a short launch update for my team with 3 bullet points" \
+  | ./target/release/compress --stats
+```
+
+Use your own prompt:
+
+```bash
+echo "YOUR PROMPT HERE" | ./target/release/compress -a 0.4
+```
+
 Build:
 
 ```bash
@@ -26,4 +49,4 @@ Read from file:
 ./target/release/compress --file prompt.txt --aggressiveness 0.4
 ```
 
-See full docs: https://github.com/DevvGwardo/prompt-compress#quick-start-60s
+See full docs: https://github.com/DevvGwardo/prompt-compress#super-simple-copypaste
