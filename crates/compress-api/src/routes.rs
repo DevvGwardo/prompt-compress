@@ -77,9 +77,9 @@ pub async fn compress(
     Json(req): Json<CompressRequest>,
 ) -> Result<Json<CompressResponse>, (StatusCode, Json<ErrorResponse>)> {
     // Keep model explicit so callers don't assume arbitrary model IDs are accepted.
-    if req.model != "scorer-v0.1" && req.model != "heuristic-v0.1" {
+    if req.model != "scorer-v0.1" && req.model != "heuristic-v0.1" && req.model != "heuristic-agent-v0.1" {
         return Err(bad_request(format!(
-            "unsupported model '{}'; supported values: scorer-v0.1, heuristic-v0.1",
+            "unsupported model '{}'; supported values: scorer-v0.1, heuristic-v0.1, heuristic-agent-v0.1",
             req.model
         )));
     }
@@ -87,7 +87,11 @@ pub async fn compress(
     let settings = CompressionSettings {
         aggressiveness: req.compression_settings.aggressiveness,
         target_model: req.compression_settings.target_model,
-        scorer_mode: HeuristicMode::Standard,
+        scorer_mode: if req.model == "heuristic-agent-v0.1" {
+            HeuristicMode::AgentAware
+        } else {
+            HeuristicMode::Standard
+        },
     };
 
     match state.compressor.compress(&req.input, &settings) {

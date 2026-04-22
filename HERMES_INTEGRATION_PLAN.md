@@ -12,7 +12,7 @@ Make prompt-compress usable as a compression layer for hermes-agent workflows, r
 
 ## Phase 2: Hermes Skill (Week 1-2)
 - [x] Create hermes skill at `~/.hermes/skills/prompt-compress/` (source: `hermes-skill/SKILL.md`, installed to `software-development/prompt-compress`)
-- [ ] Register as callable tool from hermes agent (Python plugin with /compress slash command)
+- [x] Register as callable tool from hermes agent (Python plugin installed to `~/.hermes/plugins/prompt-compress/`, SDK installed in venv)
 - [ ] Pre-compress system prompts before LLM calls
 - [ ] Post-compress context windows to extend conversation length
 

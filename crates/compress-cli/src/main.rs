@@ -32,6 +32,10 @@ struct Args {
     #[arg(long, env = "PROMPT_COMPRESS_MODEL")]
     model_dir: Option<String>,
 
+    /// Heuristic scorer mode (Standard: general-purpose, AgentAware: optimized for function calls and instructions).
+    #[arg(long, value_enum, default_value = "standard")]
+    scorer_mode: ScorerMode,
+
     /// Show compression statistics.
     #[arg(short, long)]
     stats: bool,
@@ -39,6 +43,21 @@ struct Args {
     /// Output format: text or json.
     #[arg(long, default_value = "text")]
     format: OutputFormat,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum ScorerMode {
+    Standard,
+    AgentAware,
+}
+
+impl From<ScorerMode> for compress_core::HeuristicMode {
+    fn from(mode: ScorerMode) -> Self {
+        match mode {
+            ScorerMode::Standard => compress_core::HeuristicMode::Standard,
+            ScorerMode::AgentAware => compress_core::HeuristicMode::AgentAware,
+        }
+    }
 }
 
 #[derive(Debug, Clone, clap::ValueEnum)]
@@ -99,7 +118,7 @@ fn main() -> Result<()> {
     let settings = CompressionSettings {
         aggressiveness: args.aggressiveness,
         target_model: args.target_model.clone(),
-        ..Default::default()
+        scorer_mode: args.scorer_mode.into(),
     };
 
     let result = compressor.compress(input, &settings)?;

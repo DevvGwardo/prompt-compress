@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 /// Request body for POST /v1/compress.
 #[derive(Debug, Deserialize)]
 pub struct CompressRequest {
-    /// Scoring model identifier. Supported: "scorer-v0.1", "heuristic-v0.1".
+    /// Scoring model identifier. Supported: "scorer-v0.1", "heuristic-v0.1", "heuristic-agent-v0.1".
     #[serde(default = "default_model")]
     pub model: String,
 
