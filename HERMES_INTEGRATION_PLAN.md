@@ -11,8 +11,8 @@ Make prompt-compress usable as a compression layer for hermes-agent workflows, r
 - [ ] Integration tests against live API (requires running compress-api server)
 
 ## Phase 2: Hermes Skill (Week 1-2)
-- [ ] Create hermes skill at `~/.hermes/skills/prompt-compress/`
-- [ ] Register as callable tool from hermes agent
+- [x] Create hermes skill at `~/.hermes/skills/prompt-compress/` (source: `hermes-skill/SKILL.md`, installed to `software-development/prompt-compress`)
+- [ ] Register as callable tool from hermes agent (Python plugin with /compress slash command)
 - [ ] Pre-compress system prompts before LLM calls
 - [ ] Post-compress context windows to extend conversation length
 
@@ -43,3 +43,4 @@ Make prompt-compress usable as a compression layer for hermes-agent workflows, r
 
 ## Completed
 - Phase 1 (Python SDK): `sdk/python/` created with `PromptCompressor` (sync) and `AsyncPromptCompressor` (async), dataclass models, `py.typed` marker, pyproject.toml with setuptools backend, 8 passing tests.
+- Phase 2 (Hermes Skill): `hermes-skill/SKILL.md` created and installed to `~/.hermes/skills/software-development/prompt-compress/`. Skill covers Python SDK usage, CLI usage, compression presets (system/context/tools/memory), API endpoints, error handling, and tips. Includes `install.sh` for easy reinstallation.
