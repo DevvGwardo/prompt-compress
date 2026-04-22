@@ -21,6 +21,7 @@ fn settings_serializes_to_json() {
     let settings = CompressionSettings {
         aggressiveness: 0.5,
         target_model: "claude".to_string(),
+        ..Default::default()
     };
     let json = serde_json::to_value(&settings).unwrap();
     assert_eq!(json["aggressiveness"], 0.5); // 0.5 is exact in f32
@@ -95,6 +96,7 @@ fn settings_is_cloneable() {
     let settings = CompressionSettings {
         aggressiveness: 0.8,
         target_model: "test".to_string(),
+        ..Default::default()
     };
     let cloned = settings.clone();
     assert_eq!(cloned.aggressiveness, 0.8);

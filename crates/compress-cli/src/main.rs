@@ -99,6 +99,7 @@ fn main() -> Result<()> {
     let settings = CompressionSettings {
         aggressiveness: args.aggressiveness,
         target_model: args.target_model.clone(),
+        ..Default::default()
     };
 
     let result = compressor.compress(input, &settings)?;

@@ -13,7 +13,7 @@ use axum::{
 use futures_util::TryStreamExt;
 use serde_json::Value;
 
-use compress_core::CompressionSettings;
+use compress_core::{CompressionSettings, HeuristicMode};
 
 use crate::dto::{CompressRequest, CompressResponse, ErrorDetail, ErrorResponse};
 use crate::state::{AppState, ProxyConfig};
@@ -87,6 +87,7 @@ pub async fn compress(
     let settings = CompressionSettings {
         aggressiveness: req.compression_settings.aggressiveness,
         target_model: req.compression_settings.target_model,
+        scorer_mode: HeuristicMode::Standard,
     };
 
     match state.compressor.compress(&req.input, &settings) {
@@ -108,6 +109,7 @@ fn compress_text(state: &AppState, cfg: &ProxyConfig, text: &str) -> Option<Comp
     let settings = CompressionSettings {
         aggressiveness: cfg.aggressiveness,
         target_model: cfg.target_model.clone(),
+        scorer_mode: cfg.scorer_mode,
     };
 
     match state.compressor.compress(text, &settings) {
@@ -662,6 +664,7 @@ mod tests {
                 target_model: "gpt-4".to_string(),
                 min_chars: 1,
                 only_if_smaller: false,
+                scorer_mode: compress_core::HeuristicMode::Standard,
             }),
         }
     }

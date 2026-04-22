@@ -325,6 +325,7 @@ fn main() -> Result<(), String> {
     let settings = CompressionSettings {
         aggressiveness: args.aggressiveness,
         target_model: args.target_model.clone(),
+        ..Default::default()
     };
 
     let mut results = Vec::new();

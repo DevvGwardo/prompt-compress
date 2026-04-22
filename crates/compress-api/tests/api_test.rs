@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tower_http::compression::CompressionLayer;
 use tower_http::decompression::RequestDecompressionLayer;
 
-use compress_core::{Compressor, HeuristicScorer};
+use compress_core::{Compressor, HeuristicMode, HeuristicScorer};
 
 #[derive(Clone)]
 struct AppState {
@@ -66,6 +66,7 @@ async fn compress_handler(
     let settings = compress_core::CompressionSettings {
         aggressiveness,
         target_model: "gpt-4".to_string(),
+        scorer_mode: HeuristicMode::Standard,
     };
 
     match state.compressor.compress(input, &settings) {

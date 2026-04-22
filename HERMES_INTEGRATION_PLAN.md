@@ -17,14 +17,16 @@ Make prompt-compress usable as a compression layer for hermes-agent workflows, r
 - [ ] Post-compress context windows to extend conversation length
 
 ## Phase 3: Agent-Aware Scoring (Week 2)
-- [ ] Extend HeuristicScorer with agent-prompt awareness:
-  - Protect tool/function definitions (JSON schemas)
-  - Protect code blocks (``` fenced regions)
-  - Protect markdown headers and structure
-  - Higher weight for instruction verbs ("create", "analyze", "fix")
-  - Lower weight for conversational filler in agent prompts
-- [ ] New scorer mode: `heuristic-agent-v0.1`
-- [ ] Add `--scorer-mode` CLI flag
+- [x] Extend HeuristicScorer with agent-prompt awareness (HeuristicMode enum, with Standard/AgentAware, agent-aware scoring logic: boosted instruction verbs, extra filler stop-words, calibrated importance weights)
+  - Implemented: `HeuristicMode` enum, `HeuristicScorer::with_mode()`, `word_importance()` with mode-aware scoring, protected token handling for `<ttc_safe>` regions preserved
+  - New stop-word lists: Standard vs AgentAware (extra conversational filler)
+  - Instruction verbs ("create", "analyze", "fix", etc.) score 0.95 in agent mode
+  - Added agent-aware unit tests
+  - Updated all construction sites, fixed missing `scorer_mode` field across codebase
+  - `cargo check --all && cargo test --all` pass (139 tests total)
+- [ ] New scorer model ID: `heuristic-agent-v0.1` (expose in API routing)
+- [ ] Add `--scorer-mode` CLI flag to compress-cli
+
 
 ## Phase 4: Hermes Presets (Week 2-3)
 - [ ] Pre-configured compression profiles:
@@ -42,5 +44,6 @@ Make prompt-compress usable as a compression layer for hermes-agent workflows, r
 - [ ] Metrics endpoint: track savings per session/agent
 
 ## Completed
-- Phase 1 (Python SDK): `sdk/python/` created with `PromptCompressor` (sync) and `AsyncPromptCompressor` (async), dataclass models, `py.typed` marker, pyproject.toml with setuptools backend, 8 passing tests.
-- Phase 2 (Hermes Skill): `hermes-skill/SKILL.md` created and installed to `~/.hermes/skills/software-development/prompt-compress/`. Skill covers Python SDK usage, CLI usage, compression presets (system/context/tools/memory), API endpoints, error handling, and tips. Includes `install.sh` for easy reinstallation.
+- Phase 1 (Python SDK): `sdk/python/` created with `PromptCompressor` (sync) and `AsyncPromptCompressor` (async), dataclass models, `py.typed` marker, pyproject.toml with setuptools backend, 8 passing unit tests.
+- Phase 2 (Hermes Skill): SKILL.md created and installed to `~/.hermes/skills/software-development/prompt-compress/`. Covers SDK usage, CLI usage, presets, endpoints, error handling, and tips. Includes `install.sh`.
+- Phase 3 (Agent-Aware Scoring): Rust infrastructure complete. `HeuristicMode::AgentAware` implemented with instruction-verb boosting and expanded stop-word demotion for conversational filler. All unit tests (18 scorer + 17 compressor + others) pass. CLI flag pending.

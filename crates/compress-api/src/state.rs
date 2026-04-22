@@ -21,4 +21,5 @@ pub struct ProxyConfig {
     pub target_model: String,
     pub min_chars: usize,
     pub only_if_smaller: bool,
+    pub scorer_mode: compress_core::scorer::HeuristicMode,
 }

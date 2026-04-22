@@ -49,10 +49,17 @@ async fn main() -> anyhow::Result<()> {
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(80);
     let proxy_only_if_smaller = env_bool("COMPRESS_PROXY_ONLY_IF_SMALLER", true);
+    let proxy_scorer_mode = std::env::var("COMPRESS_PROXY_SCORER_MODE")
+        .ok()
+        .and_then(|v| match v.as_str() {
+            "agent-aware" => Some(compress_core::HeuristicMode::AgentAware),
+            _ => Some(compress_core::HeuristicMode::Standard),
+        })
+        .unwrap_or(compress_core::HeuristicMode::Standard);
     let http_client = reqwest::Client::builder().build()?;
 
-    let scorer = HeuristicScorer::new();
-    let compressor = Arc::new(Compressor::new(Box::new(scorer), "gpt-4")?);
+    let scorer = HeuristicScorer::with_mode(proxy_scorer_mode);
+    let compressor = Arc::new(Compressor::new(Box::new(scorer), &proxy_target_model)?);
     let proxy = proxy_upstream_base_url.map(|upstream_base_url| ProxyConfig {
         upstream_base_url,
         upstream_api_key: proxy_upstream_api_key,
@@ -60,6 +67,7 @@ async fn main() -> anyhow::Result<()> {
         target_model: proxy_target_model,
         min_chars: proxy_min_chars,
         only_if_smaller: proxy_only_if_smaller,
+        scorer_mode: proxy_scorer_mode,
     });
 
     let state = AppState {
