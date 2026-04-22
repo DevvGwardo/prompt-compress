@@ -15,6 +15,17 @@ pub struct CompressRequest {
     pub compression_settings: CompressSettingsDto,
 }
 
+/// Request body for POST /v1/compress/preset/:name.
+#[derive(Debug, Deserialize)]
+pub struct CompressPresetRequest {
+    /// The text to compress.
+    pub input: String,
+
+    /// Target LLM model for token counting.
+    #[serde(default = "default_target_model")]
+    pub target_model: String,
+}
+
 fn default_model() -> String {
     "scorer-v0.1".to_string()
 }
@@ -39,6 +50,16 @@ fn default_target_model() -> String {
 /// Response body for POST /v1/compress.
 #[derive(Debug, Serialize)]
 pub struct CompressResponse {
+    pub output: String,
+    pub output_tokens: usize,
+    pub original_input_tokens: usize,
+    pub compression_ratio: f64,
+}
+
+/// Response body for POST /v1/compress/preset/:name.
+#[derive(Debug, Serialize)]
+pub struct CompressPresetResponse {
+    pub preset: String,
     pub output: String,
     pub output_tokens: usize,
     pub original_input_tokens: usize,

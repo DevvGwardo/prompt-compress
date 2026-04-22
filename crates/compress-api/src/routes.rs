@@ -15,7 +15,7 @@ use serde_json::Value;
 
 use compress_core::{CompressionSettings, HeuristicMode};
 
-use crate::dto::{CompressRequest, CompressResponse, ErrorDetail, ErrorResponse};
+use crate::dto::{CompressPresetRequest, CompressPresetResponse, CompressRequest, CompressResponse, ErrorDetail, ErrorResponse};
 use crate::state::{AppState, ProxyConfig};
 
 #[derive(Default)]
@@ -96,6 +96,51 @@ pub async fn compress(
 
     match state.compressor.compress(&req.input, &settings) {
         Ok(result) => Ok(Json(CompressResponse {
+            output: result.output,
+            output_tokens: result.output_tokens,
+            original_input_tokens: result.original_input_tokens,
+            compression_ratio: result.compression_ratio,
+        })),
+        Err(e) => Err(bad_request(e.to_string())),
+    }
+}
+
+fn preset_aggressiveness(preset: &str) -> Option<f32> {
+    match preset {
+        "system" => Some(0.3),
+        "context" => Some(0.5),
+        "tools" => Some(0.2),
+        "memory" => Some(0.6),
+        _ => None,
+    }
+}
+
+/// POST /v1/compress/preset/:name
+pub async fn compress_preset(
+    State(state): State<AppState>,
+    Path(preset): Path<String>,
+    Json(req): Json<CompressPresetRequest>,
+) -> Result<Json<CompressPresetResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let aggressiveness = match preset_aggressiveness(&preset) {
+        Some(a) => a,
+        None => {
+            return Err(bad_request(format!(
+                "unsupported preset '{}'; supported values: system, context, tools, memory",
+                preset
+            )));
+        }
+    };
+
+    let settings = CompressionSettings {
+        aggressiveness,
+        target_model: req.target_model,
+        scorer_mode: HeuristicMode::AgentAware,
+        ..Default::default()
+    };
+
+    match state.compressor.compress(&req.input, &settings) {
+        Ok(result) => Ok(Json(CompressPresetResponse {
+            preset: preset.clone(),
             output: result.output,
             output_tokens: result.output_tokens,
             original_input_tokens: result.original_input_tokens,
@@ -966,5 +1011,103 @@ mod tests {
             .expect("forwarded text");
 
         assert_ne!(forwarded, original);
+    }
+
+    fn preset_test_state() -> AppState {
+        let compressor =
+            Compressor::new(Box::new(HeuristicScorer::new()), "gpt-4").expect("compressor");
+        AppState {
+            compressor: Arc::new(compressor),
+            api_key: None,
+            http_client: reqwest::Client::new(),
+            proxy: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn preset_system_compresses_with_low_aggressiveness() {
+        let state = preset_test_state();
+        let app = Router::new()
+            .route("/v1/compress/preset/{name}", routing::post(super::compress_preset))
+            .with_state(state);
+        let server = TestServer::new(app);
+
+        let original = "Please create a detailed migration plan with rollback and validation steps for the database.";
+        let response = server
+            .post("/v1/compress/preset/system")
+            .json(&json!({ "input": original }))
+            .await;
+
+        response.assert_status_ok();
+        let body: serde_json::Value = response.json();
+        assert_eq!(body["preset"].as_str().unwrap(), "system");
+        let output = body["output"].as_str().unwrap();
+        assert_ne!(output, original);
+        let ratio = body["compression_ratio"].as_f64().unwrap();
+        assert!(ratio < 1.0);
+    }
+
+    #[tokio::test]
+    async fn preset_memory_compresses_aggressively() {
+        let state = preset_test_state();
+        let app = Router::new()
+            .route("/v1/compress/preset/{name}", routing::post(super::compress_preset))
+            .with_state(state);
+        let server = TestServer::new(app);
+
+        let original = "Hey there, I just wanted to say thanks for all the help yesterday. It was really great working with you on the project.";
+        let response = server
+            .post("/v1/compress/preset/memory")
+            .json(&json!({ "input": original }))
+            .await;
+
+        response.assert_status_ok();
+        let body: serde_json::Value = response.json();
+        assert_eq!(body["preset"].as_str().unwrap(), "memory");
+        let ratio = body["compression_ratio"].as_f64().unwrap();
+        assert!(ratio < 1.0);
+    }
+
+    #[tokio::test]
+    async fn preset_invalid_returns_400() {
+        let state = preset_test_state();
+        let app = Router::new()
+            .route("/v1/compress/preset/{name}", routing::post(super::compress_preset))
+            .with_state(state);
+        let server = TestServer::new(app);
+
+        let response = server
+            .post("/v1/compress/preset/invalid")
+            .json(&json!({ "input": "hello world" }))
+            .await;
+
+        response.assert_status_bad_request();
+        let body: serde_json::Value = response.json();
+        assert!(body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("unsupported preset"));
+    }
+
+    #[tokio::test]
+    async fn preset_uses_target_model_from_request() {
+        let state = preset_test_state();
+        let app = Router::new()
+            .route("/v1/compress/preset/{name}", routing::post(super::compress_preset))
+            .with_state(state);
+        let server = TestServer::new(app);
+
+        let response = server
+            .post("/v1/compress/preset/tools")
+            .json(&json!({
+                "input": "the quick brown fox jumps over the lazy dog",
+                "target_model": "claude-3-opus"
+            }))
+            .await;
+
+        response.assert_status_ok();
+        let body: serde_json::Value = response.json();
+        assert_eq!(body["preset"].as_str().unwrap(), "tools");
+        assert!(body["output_tokens"].is_number());
     }
 }

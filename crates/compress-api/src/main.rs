@@ -80,6 +80,7 @@ async fn main() -> anyhow::Result<()> {
     // Routes that require auth
     let api_routes = Router::new()
         .route("/v1/compress", routing::post(routes::compress))
+        .route("/v1/compress/preset/{name}", routing::post(routes::compress_preset))
         .route("/v1/proxy/{*path}", routing::any(routes::proxy))
         .route_layer(axum_mw::from_fn_with_state(state.clone(), middleware::auth));
 

@@ -220,6 +220,146 @@ def check_requirements() -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Module-level state: shared compressor client (lazy-initialized)
+# ---------------------------------------------------------------------------
+
+_compressor_client = None
+
+
+def _get_compressor():
+    """Get or create a shared PromptCompressor client."""
+    global _compressor_client
+    if _compressor_client is None:
+        from prompt_compress import PromptCompressor
+        base_url = _get_base_url()
+        api_key = _get_api_key()
+        _compressor_client = PromptCompressor(base_url=base_url, api_key=api_key, timeout=30.0)
+    return _compressor_client
+
+
+# ---------------------------------------------------------------------------
+# Hook: on_session_start
+# ---------------------------------------------------------------------------
+
+def _on_session_start(session_id: str, model: str = "", platform: str = "") -> None:
+    """Initialize plugin state for a new session.
+
+    Currently this eagerly warms up the compressor client so the first
+    LLM call doesn't pay the connection/lazy-import penalty.  No return
+    value — hooks are fire-and-forget.
+    """
+    try:
+        _get_compressor()
+        logger.info("prompt-compress ready for session %s (model=%s, platform=%s)", session_id, model, platform)
+    except Exception as exc:
+        logger.warning("Failed to initialize prompt-compress on session start: %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# Hook: pre_llm_call
+# ---------------------------------------------------------------------------
+
+def _pre_llm_call(
+    session_id: str,
+    user_message: str,
+    conversation_history: list,
+    is_first_turn: bool = False,
+    model: str = "",
+    platform: str = "",
+    sender_id: str = "",
+) -> str | dict | None:
+    """Compress conversation history to extend context window.
+
+    This hook fires before each LLM call.  We compress all turns
+    *except* the current user message and the most recent few turns
+    (which we preserve for relevance) and inject the compressed
+    summary as extra context into the user message.
+
+    The injected context is ephemeral — it's not persisted to the
+    session database.
+    """
+    if is_first_turn or len(conversation_history) < 4:
+        # Not enough history to warrant compression
+        return None
+
+    try:
+        # Preserve the last 2 turns (user + assistant pairs) untouched
+        # Everything before that gets compressed into a summary.
+        PROTECTED_TURNS = 2
+        protect_count = PROTECTED_TURNS * 2  # each turn = user + assistant messages
+        cutoff = max(0, len(conversation_history) - protect_count)
+        old_history = conversation_history[:cutoff]
+        recent_history = conversation_history[cutoff:]
+
+        if not old_history:
+            return None
+
+        # Serialize old history into a single text block
+        serialized = _serialize_conversation(old_history)
+
+        # Choose aggressiveness based on how much we're compressing
+        # More history → more aggressive to reclaim tokens
+        aggressiveness = 0.4  # default balanced
+        if len(old_history) > 10:
+            aggressiveness = 0.6  # aggressive for very long histories
+        elif len(old_history) > 5:
+            aggressiveness = 0.5  # moderately aggressive
+
+        # Use the heuristic-agent model for best quality (instruction-aware)
+        compressor = _get_compressor()
+        result = compressor.compress(
+            serialized,
+            aggressiveness=aggressiveness,
+            target_model=model or "gpt-4",
+            model="heuristic-agent-v0.1",
+        )
+
+        savings = result.original_input_tokens - result.output_tokens
+        if savings < 10:
+            # Not worth injecting if compression is negligible
+            return None
+
+        compressed_context = (
+            f"[Compressed context from {len(old_history)} earlier turn(s) — "
+            f"{result.original_input_tokens} → {result.output_tokens} tokens "
+            f"saved {savings}]:\n{result.output}"
+        )
+        logger.info(
+            "Compressed %d old turns: %d → %d tokens (saved %d)",
+            len(old_history),
+            result.original_input_tokens,
+            result.output_tokens,
+            savings,
+        )
+        return {"context": compressed_context}
+
+    except Exception as exc:
+        logger.warning("pre_llm_call compression failed: %s", exc)
+        return None
+
+
+def _serialize_conversation(messages: list) -> str:
+    """Serialize a list of chat messages into plain text for compression."""
+    parts = []
+    for msg in messages:
+        role = msg.get("role", "unknown")
+        content = msg.get("content", "")
+        if isinstance(content, list):
+            # Handle multimodal content blocks — extract text parts only
+            text_parts = []
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    text_parts.append(str(block.get("text", "")))
+                elif isinstance(block, dict) and block.get("type") == "input_text":
+                    text_parts.append(str(block.get("text", "")))
+            content = " ".join(text_parts)
+        else:
+            content = str(content)
+        parts.append(f"{role.upper()}: {content}")
+    return "\n\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
 # Plugin registration
 # ---------------------------------------------------------------------------
 
@@ -245,5 +385,9 @@ def register(ctx) -> None:
             "Usage: /prompt-compress <text> [--aggressiveness N] [--model NAME]"
         ),
     )
+
+    # Register lifecycle hooks for automatic compression
+    ctx.register_hook("on_session_start", _on_session_start)
+    ctx.register_hook("pre_llm_call", _pre_llm_call)
 
     logger.info("prompt-compress plugin registered")

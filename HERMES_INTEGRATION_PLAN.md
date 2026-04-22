@@ -24,18 +24,26 @@ Make prompt-compress usable as a compression layer for hermes-agent workflows, r
   - Added agent-aware unit tests
   - Updated all construction sites, fixed missing `scorer_mode` field across codebase
   - `cargo check --all && cargo test --all` pass (139 tests total)
-- [ ] New scorer model ID: `heuristic-agent-v0.1` (expose in API routing)
-- [ ] Add `--scorer-mode` CLI flag to compress-cli
+- [x] New scorer model ID: `heuristic-agent-v0.1` (expose in API routing)
+  - Already implemented in `routes.rs` — `heuristic-agent-v0.1` maps to `HeuristicMode::AgentAware`
+- [x] Add `--scorer-mode` CLI flag to compress-cli
+  - Already implemented in `compress-cli/src/main.rs` — `--scorer-mode` with `standard` (default) and `agent-aware` variants
 
 
 ## Phase 4: Hermes Presets (Week 2-3)
-- [ ] Pre-configured compression profiles:
+- [x] Pre-configured compression profiles:
   - `hermes-system`: compress system/developer prompts (aggressive=0.3)
   - `hermes-context`: compress accumulated context (aggressive=0.5)
   - `hermes-tools`: compress tool definitions (aggressive=0.2, protect schemas)
   - `hermes-memory`: compress memory/recall entries (aggressive=0.6)
 - [ ] Auto-detect prompt type and select preset
-- [ ] Add `/v1/compress/preset/<name>` API endpoint
+- [x] Add `/v1/compress/preset/<name>` API endpoint
+  - Implemented: `POST /v1/compress/preset/{name}` with presets `system` (0.3), `context` (0.5), `tools` (0.2), `memory` (0.6)
+  - Uses `HeuristicMode::AgentAware` by default for agent-optimized scoring
+  - Accepts optional `target_model` in request body
+  - Returns `CompressPresetResponse` with `preset` field included
+  - 4 unit tests added (system preset, memory preset, invalid preset 400, target_model passthrough)
+  - `cargo check --all && cargo test --all` pass (153 tests total)
 
 ## Phase 5: Deep Integration (Week 3-4)
 - [ ] Middleware mode: intercept hermes LLM calls transparently
