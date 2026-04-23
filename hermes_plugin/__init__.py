@@ -268,74 +268,119 @@ def _pre_llm_call(
     platform: str = "",
     sender_id: str = "",
 ) -> str | dict | None:
-    """Compress conversation history to extend context window.
+    """Compress system prompts and old conversation history before LLM calls.
 
-    This hook fires before each LLM call.  We compress all turns
-    *except* the current user message and the most recent few turns
-    (which we preserve for relevance) and inject the compressed
-    summary as extra context into the user message.
+    This hook fires before each LLM call and performs two compression
+    steps:
 
-    The injected context is ephemeral — it's not persisted to the
-    session database.
+    1. **System-prompt compression** — detects ``role="system"`` messages
+       in the conversation history and compresses them using the
+       ``system`` preset (aggressiveness 0.3).  This runs on every turn
+       so long system prompts are always compact.
+
+    2. **Context-window compression** — preserves the most recent 2
+       turns (user + assistant pairs) and compresses everything before
+       that into a summary.  Only runs when there are at least 4
+       messages in history.
+
+    The returned dict may contain ``system_prompt`` and/or ``context``
+    keys.  Both are ephemeral — they are not persisted to the session
+    database.
     """
-    if is_first_turn or len(conversation_history) < 4:
-        # Not enough history to warrant compression
-        return None
+    result: dict[str, str] = {}
 
-    try:
-        # Preserve the last 2 turns (user + assistant pairs) untouched
-        # Everything before that gets compressed into a summary.
-        PROTECTED_TURNS = 2
-        protect_count = PROTECTED_TURNS * 2  # each turn = user + assistant messages
-        cutoff = max(0, len(conversation_history) - protect_count)
-        old_history = conversation_history[:cutoff]
-        recent_history = conversation_history[cutoff:]
+    # ------------------------------------------------------------------
+    # 1. System-prompt compression
+    # ------------------------------------------------------------------
+    system_text = _extract_system_prompts(conversation_history)
+    if system_text and len(system_text) > 150:
+        try:
+            compressor = _get_compressor()
+            compressed = compressor.compress_preset(
+                system_text,
+                "system",
+                target_model=model or "gpt-4",
+            )
+            savings = compressed.original_input_tokens - compressed.output_tokens
+            if savings >= 5:
+                result["system_prompt"] = compressed.output
+                logger.info(
+                    "Compressed system prompt: %d → %d tokens (saved %d)",
+                    compressed.original_input_tokens,
+                    compressed.output_tokens,
+                    savings,
+                )
+        except Exception as exc:
+            logger.warning("System prompt compression failed: %s", exc)
 
-        if not old_history:
-            return None
+    # ------------------------------------------------------------------
+    # 2. Context-window compression
+    # ------------------------------------------------------------------
+    if not is_first_turn and len(conversation_history) >= 4:
+        try:
+            PROTECTED_TURNS = 2
+            protect_count = PROTECTED_TURNS * 2  # each turn = user + assistant messages
+            cutoff = max(0, len(conversation_history) - protect_count)
+            old_history = conversation_history[:cutoff]
 
-        # Serialize old history into a single text block
-        serialized = _serialize_conversation(old_history)
+            if old_history:
+                serialized = _serialize_conversation(old_history)
 
-        # Choose aggressiveness based on how much we're compressing
-        # More history → more aggressive to reclaim tokens
-        aggressiveness = 0.4  # default balanced
-        if len(old_history) > 10:
-            aggressiveness = 0.6  # aggressive for very long histories
-        elif len(old_history) > 5:
-            aggressiveness = 0.5  # moderately aggressive
+                aggressiveness = 0.4  # default balanced
+                if len(old_history) > 10:
+                    aggressiveness = 0.6
+                elif len(old_history) > 5:
+                    aggressiveness = 0.5
 
-        # Use the heuristic-agent model for best quality (instruction-aware)
-        compressor = _get_compressor()
-        result = compressor.compress(
-            serialized,
-            aggressiveness=aggressiveness,
-            target_model=model or "gpt-4",
-            model="heuristic-agent-v0.1",
-        )
+                compressor = _get_compressor()
+                resp = compressor.compress(
+                    serialized,
+                    aggressiveness=aggressiveness,
+                    target_model=model or "gpt-4",
+                    model="heuristic-agent-v0.1",
+                )
 
-        savings = result.original_input_tokens - result.output_tokens
-        if savings < 10:
-            # Not worth injecting if compression is negligible
-            return None
+                savings = resp.original_input_tokens - resp.output_tokens
+                if savings >= 10:
+                    result["context"] = (
+                        f"[Compressed context from {len(old_history)} earlier turn(s) — "
+                        f"{resp.original_input_tokens} → {resp.output_tokens} tokens "
+                        f"saved {savings}]:\n{resp.output}"
+                    )
+                    logger.info(
+                        "Compressed %d old turns: %d → %d tokens (saved %d)",
+                        len(old_history),
+                        resp.original_input_tokens,
+                        resp.output_tokens,
+                        savings,
+                    )
+        except Exception as exc:
+            logger.warning("pre_llm_call context compression failed: %s", exc)
 
-        compressed_context = (
-            f"[Compressed context from {len(old_history)} earlier turn(s) — "
-            f"{result.original_input_tokens} → {result.output_tokens} tokens "
-            f"saved {savings}]:\n{result.output}"
-        )
-        logger.info(
-            "Compressed %d old turns: %d → %d tokens (saved %d)",
-            len(old_history),
-            result.original_input_tokens,
-            result.output_tokens,
-            savings,
-        )
-        return {"context": compressed_context}
+    return result if result else None
 
-    except Exception as exc:
-        logger.warning("pre_llm_call compression failed: %s", exc)
-        return None
+
+def _extract_system_prompts(messages: list) -> str:
+    """Extract and concatenate all system prompt messages from history.
+
+    Handles plain-text content as well as multimodal content blocks
+    (extracts only text parts).
+    """
+    parts = []
+    for msg in messages:
+        if msg.get("role") == "system":
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                text_parts = []
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") in ("text", "input_text"):
+                        text_parts.append(str(block.get("text", "")))
+                content = " ".join(text_parts)
+            else:
+                content = str(content)
+            if content.strip():
+                parts.append(content.strip())
+    return "\n\n".join(parts)
 
 
 def _serialize_conversation(messages: list) -> str:

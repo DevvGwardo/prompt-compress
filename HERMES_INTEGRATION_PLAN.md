@@ -16,8 +16,14 @@ Make prompt-compress usable as a compression layer for hermes-agent workflows, r
 ## Phase 2: Hermes Skill (Week 1-2)
 - [x] Create hermes skill at `~/.hermes/skills/prompt-compress/` (source: `hermes-skill/SKILL.md`, installed to `software-development/prompt-compress`)
 - [x] Register as callable tool from hermes agent (Python plugin installed to `~/.hermes/plugins/prompt-compress/`, SDK installed in venv)
-- [ ] Pre-compress system prompts before LLM calls
-- [ ] Post-compress context windows to extend conversation length
+- [x] Pre-compress system prompts before LLM calls
+  - Implemented in `hermes_plugin/__init__.py` `_pre_llm_call` hook: detects `role="system"` messages, compresses using `system` preset (aggressiveness 0.3) via `compress_preset()` if >150 chars and saves ≥5 tokens
+  - Returns compressed system prompt in dict under `system_prompt` key
+  - Gracefully handles errors (logs warning, returns None)
+- [x] Post-compress context windows to extend conversation length
+  - Implemented in same `_pre_llm_call` hook: preserves last 2 turns, compresses older history using `heuristic-agent-v0.1` model with adaptive aggressiveness (0.4–0.6)
+  - 25 plugin unit tests added covering system prompt extraction, context serialization, pre_llm_call behavior, tool handler, slash command, and error handling
+  - All tests pass (`PYTHONPATH=. pytest hermes_plugin/tests/test_plugin.py -v` → 25 passed)
 
 ## Phase 3: Agent-Aware Scoring (Week 2)
 - [x] Extend HeuristicScorer with agent-prompt awareness (HeuristicMode enum, with Standard/AgentAware, agent-aware scoring logic: boosted instruction verbs, extra filler stop-words, calibrated importance weights)
