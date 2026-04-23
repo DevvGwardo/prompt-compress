@@ -1371,4 +1371,184 @@ mod tests {
 
         response.assert_status_bad_request();
     }
+
+    // ─── Metrics endpoint tests ──────────────────────────────────────────
+
+    #[tokio::test]
+    async fn metrics_empty_initially() {
+        let state = preset_test_state();
+        let app = Router::new()
+            .route("/v1/metrics", routing::get(super::metrics))
+            .with_state(state);
+        let server = TestServer::new(app);
+
+        let response = server.get("/v1/metrics").await;
+        response.assert_status_ok();
+        let body: serde_json::Value = response.json();
+        assert!(body["sessions"].as_array().unwrap().is_empty());
+        assert_eq!(body["total_compressions"].as_u64().unwrap(), 0);
+        assert_eq!(body["total_original_tokens"].as_u64().unwrap(), 0);
+        assert_eq!(body["total_output_tokens"].as_u64().unwrap(), 0);
+        assert_eq!(body["total_savings"].as_u64().unwrap(), 0);
+        assert_eq!(body["overall_compression_ratio"].as_f64().unwrap(), 1.0);
+    }
+
+    #[tokio::test]
+    async fn metrics_tracks_single_compression() {
+        let state = preset_test_state();
+        let app = Router::new()
+            .route("/v1/compress", routing::post(super::compress))
+            .route("/v1/metrics", routing::get(super::metrics))
+            .with_state(state);
+        let server = TestServer::new(app);
+
+        let response = server
+            .post("/v1/compress")
+            .json(&json!({
+                "input": "the quick brown fox jumps over the lazy dog and it was a very good day",
+                "compression_settings": { "aggressiveness": 0.5 }
+            }))
+            .await;
+        response.assert_status_ok();
+
+        let metrics_response = server.get("/v1/metrics").await;
+        metrics_response.assert_status_ok();
+        let body: serde_json::Value = metrics_response.json();
+
+        assert_eq!(body["sessions"].as_array().unwrap().len(), 1);
+        assert_eq!(body["total_compressions"].as_u64().unwrap(), 1);
+        assert!(body["total_original_tokens"].as_u64().unwrap() > 0);
+        assert!(body["total_output_tokens"].as_u64().unwrap() > 0);
+        assert!(body["overall_compression_ratio"].as_f64().unwrap() <= 1.0);
+    }
+
+    #[tokio::test]
+    async fn metrics_tracks_session_id_and_agent() {
+        let state = preset_test_state();
+        let app = Router::new()
+            .route("/v1/compress", routing::post(super::compress))
+            .route("/v1/metrics", routing::get(super::metrics))
+            .with_state(state);
+        let server = TestServer::new(app);
+
+        let response = server
+            .post("/v1/compress")
+            .json(&json!({
+                "input": "the quick brown fox jumps over the lazy dog",
+                "compression_settings": { "aggressiveness": 0.5 },
+                "session_id": "sess-42",
+                "agent": "hermes-test"
+            }))
+            .await;
+        response.assert_status_ok();
+
+        let metrics_response = server.get("/v1/metrics").await;
+        metrics_response.assert_status_ok();
+        let body: serde_json::Value = metrics_response.json();
+
+        let sessions = body["sessions"].as_array().unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0]["session_id"].as_str().unwrap(), "sess-42");
+        assert_eq!(sessions[0]["agent"].as_str().unwrap(), "hermes-test");
+        assert_eq!(sessions[0]["total_compressions"].as_u64().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn metrics_filters_by_session_id() {
+        let state = preset_test_state();
+        let app = Router::new()
+            .route("/v1/compress", routing::post(super::compress))
+            .route("/v1/metrics", routing::get(super::metrics))
+            .with_state(state);
+        let server = TestServer::new(app);
+
+        for (session, input) in [
+            ("sess-a", "the quick brown fox jumps over the lazy dog"),
+            ("sess-b", "a very good day indeed for everyone involved"),
+        ] {
+            let response = server
+                .post("/v1/compress")
+                .json(&json!({
+                    "input": input,
+                    "compression_settings": { "aggressiveness": 0.5 },
+                    "session_id": session
+                }))
+                .await;
+            response.assert_status_ok();
+        }
+
+        let metrics_response = server.get("/v1/metrics?session_id=sess-a").await;
+        metrics_response.assert_status_ok();
+        let body: serde_json::Value = metrics_response.json();
+
+        let sessions = body["sessions"].as_array().unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0]["session_id"].as_str().unwrap(), "sess-a");
+        assert_eq!(body["total_compressions"].as_u64().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn metrics_filters_by_agent() {
+        let state = preset_test_state();
+        let app = Router::new()
+            .route("/v1/compress", routing::post(super::compress))
+            .route("/v1/metrics", routing::get(super::metrics))
+            .with_state(state);
+        let server = TestServer::new(app);
+
+        for (agent, input) in [
+            ("agent-x", "the quick brown fox jumps over the lazy dog"),
+            ("agent-y", "a very good day indeed for everyone involved"),
+        ] {
+            let response = server
+                .post("/v1/compress")
+                .json(&json!({
+                    "input": input,
+                    "compression_settings": { "aggressiveness": 0.5 },
+                    "session_id": format!("sess-{}", agent),
+                    "agent": agent
+                }))
+                .await;
+            response.assert_status_ok();
+        }
+
+        let metrics_response = server.get("/v1/metrics?agent=agent-x").await;
+        metrics_response.assert_status_ok();
+        let body: serde_json::Value = metrics_response.json();
+
+        let sessions = body["sessions"].as_array().unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0]["agent"].as_str().unwrap(), "agent-x");
+    }
+
+    #[tokio::test]
+    async fn metrics_aggregates_multiple_calls() {
+        let state = preset_test_state();
+        let app = Router::new()
+            .route("/v1/compress", routing::post(super::compress))
+            .route("/v1/metrics", routing::get(super::metrics))
+            .with_state(state);
+        let server = TestServer::new(app);
+
+        for _ in 0..3 {
+            let response = server
+                .post("/v1/compress")
+                .json(&json!({
+                    "input": "the quick brown fox jumps over the lazy dog and it was a very good day for everyone involved",
+                    "compression_settings": { "aggressiveness": 0.5 },
+                    "session_id": "sess-multi"
+                }))
+                .await;
+            response.assert_status_ok();
+        }
+
+        let metrics_response = server.get("/v1/metrics").await;
+        metrics_response.assert_status_ok();
+        let body: serde_json::Value = metrics_response.json();
+
+        assert_eq!(body["total_compressions"].as_u64().unwrap(), 3);
+        let sessions = body["sessions"].as_array().unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0]["total_compressions"].as_u64().unwrap(), 3);
+    }
 }
