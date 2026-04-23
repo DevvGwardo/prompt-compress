@@ -219,3 +219,56 @@ class TestLiveAPIPresetAsync:
         async with AsyncPromptCompressor() as client:
             with pytest.raises(httpx.HTTPStatusError):
                 await client.compress_preset("test", "nope")
+
+
+class TestLiveAPIDetectSync:
+    """Tests for auto-detect endpoint (sync)."""
+
+    def test_detect_system_prompt(self):
+        """Test auto-detect picks system preset for instruction text."""
+        client = PromptCompressor()
+        text = "You are a helpful assistant. Your task is to write clean code. You must follow PEP 8."
+        result = client.compress_detect(text)
+        assert result.detected_preset == "system"
+        assert result.output
+        client.close()
+
+    def test_detect_tools_prompt(self):
+        """Test auto-detect picks tools preset for JSON schema text."""
+        client = PromptCompressor()
+        text = '{"type": "function", "name": "get_weather", "parameters": {"properties": {"city": {"type": "string"}}, "required": ["city"]}}'
+        result = client.compress_detect(text)
+        assert result.detected_preset == "tools"
+        assert result.output
+        client.close()
+
+    def test_detect_memory_prompt(self):
+        """Test auto-detect picks memory preset for recall text."""
+        client = PromptCompressor()
+        text = "Earlier we discussed deployment. You said Kubernetes. I said Docker Compose."
+        result = client.compress_detect(text)
+        assert result.detected_preset == "memory"
+        assert result.output
+        client.close()
+
+    def test_detect_context_fallback(self):
+        """Test auto-detect falls back to context for generic text."""
+        client = PromptCompressor()
+        text = "The quick brown fox jumps over the lazy dog."
+        result = client.compress_detect(text)
+        assert result.detected_preset == "context"
+        assert result.output
+        client.close()
+
+
+class TestLiveAPIDetectAsync:
+    """Tests for auto-detect endpoint (async)."""
+
+    @pytest.mark.asyncio
+    async def test_async_detect_system(self):
+        """Test async auto-detect picks system preset."""
+        async with AsyncPromptCompressor() as client:
+            text = "You are an expert. Your role is to review code. You should be thorough."
+            result = await client.compress_detect(text)
+            assert result.detected_preset == "system"
+            assert result.output

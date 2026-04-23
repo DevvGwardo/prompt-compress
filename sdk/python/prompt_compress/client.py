@@ -6,7 +6,7 @@ from typing import Optional
 
 import httpx
 
-from .models import CompressRequest, CompressResponse, CompressPresetResponse, CompressionSettings
+from .models import CompressRequest, CompressResponse, CompressPresetResponse, CompressDetectResponse, CompressionSettings
 
 _DEFAULT_BASE_URL = "http://localhost:3000"
 
@@ -34,6 +34,16 @@ def _parse_response(data: dict) -> CompressResponse:
 def _parse_preset_response(data: dict) -> CompressPresetResponse:
     return CompressPresetResponse(
         preset=data["preset"],
+        output=data["output"],
+        output_tokens=data["output_tokens"],
+        original_input_tokens=data["original_input_tokens"],
+        compression_ratio=data["compression_ratio"],
+    )
+
+
+def _parse_detect_response(data: dict) -> CompressDetectResponse:
+    return CompressDetectResponse(
+        detected_preset=data["detected_preset"],
         output=data["output"],
         output_tokens=data["output_tokens"],
         original_input_tokens=data["original_input_tokens"],
@@ -104,6 +114,22 @@ class PromptCompressor:
         resp.raise_for_status()
         return _parse_preset_response(resp.json())
 
+    def compress_detect(
+        self,
+        text: str,
+        *,
+        target_model: str = "gpt-4",
+    ) -> CompressDetectResponse:
+        """Compress a text prompt with auto-detected preset.
+
+        The server analyzes the content and picks the best preset
+        (``system``, ``context``, ``tools``, or ``memory``).
+        """
+        payload = {"input": text, "target_model": target_model}
+        resp = self._client.post("/v1/compress/detect", json=payload)
+        resp.raise_for_status()
+        return _parse_detect_response(resp.json())
+
     def close(self) -> None:
         self._client.close()
 
@@ -172,6 +198,22 @@ class AsyncPromptCompressor:
         resp = await self._client.post(f"/v1/compress/preset/{preset}", json=payload)
         resp.raise_for_status()
         return _parse_preset_response(resp.json())
+
+    async def compress_detect(
+        self,
+        text: str,
+        *,
+        target_model: str = "gpt-4",
+    ) -> CompressDetectResponse:
+        """Compress a text prompt with auto-detected preset (async).
+
+        The server analyzes the content and picks the best preset
+        (``system``, ``context``, ``tools``, or ``memory``).
+        """
+        payload = {"input": text, "target_model": target_model}
+        resp = await self._client.post("/v1/compress/detect", json=payload)
+        resp.raise_for_status()
+        return _parse_detect_response(resp.json())
 
     async def close(self) -> None:
         await self._client.aclose()

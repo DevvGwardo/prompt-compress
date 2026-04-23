@@ -5,6 +5,7 @@ from .models import (
     CompressRequest,
     CompressResponse,
     CompressPresetResponse,
+    CompressDetectResponse,
     CompressionSettings,
 )
 
@@ -14,5 +15,6 @@ __all__ = [
     "CompressRequest",
     "CompressResponse",
     "CompressPresetResponse",
+    "CompressDetectResponse",
     "CompressionSettings",
 ]

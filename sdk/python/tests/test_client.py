@@ -9,7 +9,7 @@ from prompt_compress import (
     CompressionSettings,
     PromptCompressor,
 )
-from prompt_compress.client import _build_payload, _parse_response
+from prompt_compress.client import _build_payload, _parse_response, _parse_detect_response
 
 
 class TestModels:
@@ -34,6 +34,19 @@ class TestModels:
         assert r.output_tokens == 5
         assert r.original_input_tokens == 10
         assert r.compression_ratio == 0.5
+
+    def test_compress_detect_response_fields(self):
+        from prompt_compress import CompressDetectResponse
+        r = CompressDetectResponse(
+            detected_preset="system",
+            output="compressed",
+            output_tokens=5,
+            original_input_tokens=10,
+            compression_ratio=0.5,
+        )
+        assert r.detected_preset == "system"
+        assert r.output == "compressed"
+        assert r.output_tokens == 5
 
 
 class TestPayloadHelpers:
@@ -61,6 +74,19 @@ class TestPayloadHelpers:
         assert resp.output_tokens == 3
         assert resp.original_input_tokens == 10
         assert resp.compression_ratio == 0.3
+
+    def test_parse_detect_response(self):
+        data = {
+            "detected_preset": "memory",
+            "output": "shortened",
+            "output_tokens": 3,
+            "original_input_tokens": 10,
+            "compression_ratio": 0.3,
+        }
+        resp = _parse_detect_response(data)
+        assert resp.detected_preset == "memory"
+        assert resp.output == "shortened"
+        assert resp.output_tokens == 3
 
 
 class TestSyncClientBasics:

@@ -45,7 +45,17 @@ Make prompt-compress usable as a compression layer for hermes-agent workflows, r
   - `hermes-context`: compress accumulated context (aggressive=0.5)
   - `hermes-tools`: compress tool definitions (aggressive=0.2, protect schemas)
   - `hermes-memory`: compress memory/recall entries (aggressive=0.6)
-- [ ] Auto-detect prompt type and select preset
+- [x] Auto-detect prompt type and select preset
+  - Implemented: `POST /v1/compress/detect` endpoint with `detect_preset()` heuristics
+  - Detects `tools` by JSON/schema density (braces, quotes, keywords like "type"/"properties"/"function")
+  - Detects `system` by instruction markers ("you are", "your task", "must", "should", etc.) — 2+ hits
+  - Detects `memory` by recall markers ("earlier", "we discussed", "you said", etc.) — 2+ hits
+  - Falls back to `context` for generic text
+  - Returns `CompressDetectResponse` with `detected_preset` field
+  - 5 Rust unit tests added (tools, system, memory, context, empty input)
+  - Python SDK: `PromptCompressor.compress_detect()` and `AsyncPromptCompressor.compress_detect()`
+  - Python SDK unit tests: `CompressDetectResponse` model + `_parse_detect_response` helper
+  - Python integration tests: 4 sync + 1 async detect test cases added
 - [x] Add `/v1/compress/preset/<name>` API endpoint
   - Implemented: `POST /v1/compress/preset/{name}` with presets `system` (0.3), `context` (0.5), `tools` (0.2), `memory` (0.6)
   - Uses `HeuristicMode::AgentAware` by default for agent-optimized scoring

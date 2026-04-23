@@ -15,7 +15,7 @@ use serde_json::Value;
 
 use compress_core::{CompressionSettings, HeuristicMode};
 
-use crate::dto::{CompressPresetRequest, CompressPresetResponse, CompressRequest, CompressResponse, ErrorDetail, ErrorResponse};
+use crate::dto::{CompressDetectRequest, CompressDetectResponse, CompressPresetRequest, CompressPresetResponse, CompressRequest, CompressResponse, ErrorDetail, ErrorResponse};
 use crate::state::{AppState, ProxyConfig};
 
 #[derive(Default)]
@@ -141,6 +141,73 @@ pub async fn compress_preset(
     match state.compressor.compress(&req.input, &settings) {
         Ok(result) => Ok(Json(CompressPresetResponse {
             preset: preset.clone(),
+            output: result.output,
+            output_tokens: result.output_tokens,
+            original_input_tokens: result.original_input_tokens,
+            compression_ratio: result.compression_ratio,
+        })),
+        Err(e) => Err(bad_request(e.to_string())),
+    }
+}
+
+fn detect_preset(input: &str) -> &'static str {
+    let lower = input.to_lowercase();
+
+    // Tools: JSON/schema heavy content
+    let brace_count = input.chars().filter(|&c| c == '{' || c == '}').count();
+    let quote_count = input.chars().filter(|&c| c == '"').count();
+    let has_schema_keywords = ["\"type\"", "\"properties\"", "\"function\"", "\"parameters\"", "\"required\"", "\"enum\"", "\"description\""]
+        .iter()
+        .any(|kw| lower.contains(kw.trim_matches('\"')));
+    let tools_score = brace_count.saturating_add(quote_count / 2);
+    if tools_score >= 6 || has_schema_keywords {
+        return "tools";
+    }
+
+    // System: instruction/persona patterns
+    let system_markers = [
+        "you are", "your role", "your task", "instructions", "behavior",
+        "strictly", "act as", "persona", "system prompt", "you must",
+        "you should", "always", "never", "do not", "important:", "note:",
+    ];
+    let system_hits = system_markers.iter().filter(|&&m| lower.contains(m)).count();
+    if system_hits >= 2 {
+        return "system";
+    }
+
+    // Memory: recall/conversational history patterns
+    let memory_markers = [
+        "earlier", "previous", "conversation", "we discussed", "you said",
+        "i said", "recalled", "remember", "turn", "ago", "last time",
+        "a while back", "as mentioned", "previously", "in the past",
+    ];
+    let memory_hits = memory_markers.iter().filter(|&&m| lower.contains(m)).count();
+    if memory_hits >= 2 {
+        return "memory";
+    }
+
+    // Default: general context
+    "context"
+}
+
+/// POST /v1/compress/detect
+pub async fn compress_detect(
+    State(state): State<AppState>,
+    Json(req): Json<CompressDetectRequest>,
+) -> Result<Json<CompressDetectResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let preset = detect_preset(&req.input);
+    let aggressiveness = preset_aggressiveness(preset).unwrap_or(0.5);
+
+    let settings = CompressionSettings {
+        aggressiveness,
+        target_model: req.target_model,
+        scorer_mode: HeuristicMode::AgentAware,
+        ..Default::default()
+    };
+
+    match state.compressor.compress(&req.input, &settings) {
+        Ok(result) => Ok(Json(CompressDetectResponse {
+            detected_preset: preset.to_string(),
             output: result.output,
             output_tokens: result.output_tokens,
             original_input_tokens: result.original_input_tokens,
@@ -1109,5 +1176,100 @@ mod tests {
         let body: serde_json::Value = response.json();
         assert_eq!(body["preset"].as_str().unwrap(), "tools");
         assert!(body["output_tokens"].is_number());
+    }
+
+    // ─── Auto-detect preset tests ────────────────────────────────────────
+
+    #[tokio::test]
+    async fn detect_selects_tools_for_json_schema() {
+        let state = preset_test_state();
+        let app = Router::new()
+            .route("/v1/compress/detect", routing::post(super::compress_detect))
+            .with_state(state);
+        let server = TestServer::new(app);
+
+        let input = r#"{"type": "function", "name": "get_weather", "parameters": {"properties": {"city": {"type": "string"}}, "required": ["city"]}}"#;
+        let response = server
+            .post("/v1/compress/detect")
+            .json(&json!({ "input": input }))
+            .await;
+
+        response.assert_status_ok();
+        let body: serde_json::Value = response.json();
+        assert_eq!(body["detected_preset"].as_str().unwrap(), "tools");
+        assert!(body["compression_ratio"].as_f64().unwrap() <= 1.0);
+    }
+
+    #[tokio::test]
+    async fn detect_selects_system_for_instructions() {
+        let state = preset_test_state();
+        let app = Router::new()
+            .route("/v1/compress/detect", routing::post(super::compress_detect))
+            .with_state(state);
+        let server = TestServer::new(app);
+
+        let input = "You are a helpful coding assistant. Your task is to analyze code and suggest improvements. You must always be concise and accurate.";
+        let response = server
+            .post("/v1/compress/detect")
+            .json(&json!({ "input": input }))
+            .await;
+
+        response.assert_status_ok();
+        let body: serde_json::Value = response.json();
+        assert_eq!(body["detected_preset"].as_str().unwrap(), "system");
+    }
+
+    #[tokio::test]
+    async fn detect_selects_memory_for_recall() {
+        let state = preset_test_state();
+        let app = Router::new()
+            .route("/v1/compress/detect", routing::post(super::compress_detect))
+            .with_state(state);
+        let server = TestServer::new(app);
+
+        let input = "Earlier in the conversation we discussed deployment strategies. You said Kubernetes was your preference. I said I preferred simpler Docker Compose setups.";
+        let response = server
+            .post("/v1/compress/detect")
+            .json(&json!({ "input": input }))
+            .await;
+
+        response.assert_status_ok();
+        let body: serde_json::Value = response.json();
+        assert_eq!(body["detected_preset"].as_str().unwrap(), "memory");
+    }
+
+    #[tokio::test]
+    async fn detect_selects_context_for_generic_text() {
+        let state = preset_test_state();
+        let app = Router::new()
+            .route("/v1/compress/detect", routing::post(super::compress_detect))
+            .with_state(state);
+        let server = TestServer::new(app);
+
+        let input = "The quick brown fox jumps over the lazy dog and it was a very good day for everyone involved.";
+        let response = server
+            .post("/v1/compress/detect")
+            .json(&json!({ "input": input }))
+            .await;
+
+        response.assert_status_ok();
+        let body: serde_json::Value = response.json();
+        assert_eq!(body["detected_preset"].as_str().unwrap(), "context");
+    }
+
+    #[tokio::test]
+    async fn detect_empty_input_returns_400() {
+        let state = preset_test_state();
+        let app = Router::new()
+            .route("/v1/compress/detect", routing::post(super::compress_detect))
+            .with_state(state);
+        let server = TestServer::new(app);
+
+        let response = server
+            .post("/v1/compress/detect")
+            .json(&json!({ "input": "" }))
+            .await;
+
+        response.assert_status_bad_request();
     }
 }
