@@ -6,13 +6,18 @@ from typing import Optional
 
 import httpx
 
-from .models import CompressRequest, CompressResponse, CompressPresetResponse, CompressDetectResponse, CompressionSettings
+from .models import (
+    CompressRequest, CompressResponse, CompressPresetResponse, CompressDetectResponse,
+    CompressionSettings, MetricsResponse, MetricsEntry,
+)
+
+_ = MetricsEntry  # re-export for callers
 
 _DEFAULT_BASE_URL = "http://localhost:3000"
 
 
 def _build_payload(req: CompressRequest) -> dict:
-    return {
+    payload = {
         "model": req.model,
         "input": req.input,
         "compression_settings": {
@@ -20,6 +25,11 @@ def _build_payload(req: CompressRequest) -> dict:
             "target_model": req.compression_settings.target_model,
         },
     }
+    if req.session_id:
+        payload["session_id"] = req.session_id
+    if req.agent:
+        payload["agent"] = req.agent
+    return payload
 
 
 def _parse_response(data: dict) -> CompressResponse:
@@ -84,6 +94,8 @@ class PromptCompressor:
         model: str = "scorer-v0.1",
         aggressiveness: float = 0.5,
         target_model: str = "gpt-4",
+        session_id: Optional[str] = None,
+        agent: Optional[str] = None,
     ) -> CompressResponse:
         """Compress a text prompt and return the result."""
         req = CompressRequest(
@@ -93,6 +105,8 @@ class PromptCompressor:
                 aggressiveness=aggressiveness,
                 target_model=target_model,
             ),
+            session_id=session_id,
+            agent=agent,
         )
         resp = self._client.post("/v1/compress", json=_build_payload(req))
         resp.raise_for_status()
@@ -104,12 +118,18 @@ class PromptCompressor:
         preset: str,
         *,
         target_model: str = "gpt-4",
+        session_id: Optional[str] = None,
+        agent: Optional[str] = None,
     ) -> CompressPresetResponse:
         """Compress a text prompt using a named preset.
 
         Supported presets: ``system``, ``context``, ``tools``, ``memory``.
         """
         payload = {"input": text, "target_model": target_model}
+        if session_id:
+            payload["session_id"] = session_id
+        if agent:
+            payload["agent"] = agent
         resp = self._client.post(f"/v1/compress/preset/{preset}", json=payload)
         resp.raise_for_status()
         return _parse_preset_response(resp.json())
@@ -119,6 +139,8 @@ class PromptCompressor:
         text: str,
         *,
         target_model: str = "gpt-4",
+        session_id: Optional[str] = None,
+        agent: Optional[str] = None,
     ) -> CompressDetectResponse:
         """Compress a text prompt with auto-detected preset.
 
@@ -126,9 +148,48 @@ class PromptCompressor:
         (``system``, ``context``, ``tools``, or ``memory``).
         """
         payload = {"input": text, "target_model": target_model}
+        if session_id:
+            payload["session_id"] = session_id
+        if agent:
+            payload["agent"] = agent
         resp = self._client.post("/v1/compress/detect", json=payload)
         resp.raise_for_status()
         return _parse_detect_response(resp.json())
+
+    def get_metrics(
+        self,
+        *,
+        session_id: Optional[str] = None,
+        agent: Optional[str] = None,
+    ) -> MetricsResponse:
+        """Fetch compression metrics from the server."""
+        params: dict[str, str] = {}
+        if session_id:
+            params["session_id"] = session_id
+        if agent:
+            params["agent"] = agent
+        resp = self._client.get("/v1/metrics", params=params)
+        resp.raise_for_status()
+        data = resp.json()
+        return MetricsResponse(
+            sessions=[
+                MetricsEntry(
+                    session_id=s["session_id"],
+                    agent=s.get("agent"),
+                    total_compressions=s["total_compressions"],
+                    total_original_tokens=s["total_original_tokens"],
+                    total_output_tokens=s["total_output_tokens"],
+                    total_savings=s["total_savings"],
+                    avg_compression_ratio=s["avg_compression_ratio"],
+                )
+                for s in data["sessions"]
+            ],
+            total_compressions=data["total_compressions"],
+            total_original_tokens=data["total_original_tokens"],
+            total_output_tokens=data["total_output_tokens"],
+            total_savings=data["total_savings"],
+            overall_compression_ratio=data["overall_compression_ratio"],
+        )
 
     def close(self) -> None:
         self._client.close()
@@ -169,6 +230,8 @@ class AsyncPromptCompressor:
         model: str = "scorer-v0.1",
         aggressiveness: float = 0.5,
         target_model: str = "gpt-4",
+        session_id: Optional[str] = None,
+        agent: Optional[str] = None,
     ) -> CompressResponse:
         """Compress a text prompt and return the result."""
         req = CompressRequest(
@@ -178,6 +241,8 @@ class AsyncPromptCompressor:
                 aggressiveness=aggressiveness,
                 target_model=target_model,
             ),
+            session_id=session_id,
+            agent=agent,
         )
         resp = await self._client.post("/v1/compress", json=_build_payload(req))
         resp.raise_for_status()
@@ -189,12 +254,18 @@ class AsyncPromptCompressor:
         preset: str,
         *,
         target_model: str = "gpt-4",
+        session_id: Optional[str] = None,
+        agent: Optional[str] = None,
     ) -> CompressPresetResponse:
         """Compress a text prompt using a named preset (async).
 
         Supported presets: ``system``, ``context``, ``tools``, ``memory``.
         """
         payload = {"input": text, "target_model": target_model}
+        if session_id:
+            payload["session_id"] = session_id
+        if agent:
+            payload["agent"] = agent
         resp = await self._client.post(f"/v1/compress/preset/{preset}", json=payload)
         resp.raise_for_status()
         return _parse_preset_response(resp.json())
@@ -204,6 +275,8 @@ class AsyncPromptCompressor:
         text: str,
         *,
         target_model: str = "gpt-4",
+        session_id: Optional[str] = None,
+        agent: Optional[str] = None,
     ) -> CompressDetectResponse:
         """Compress a text prompt with auto-detected preset (async).
 
@@ -211,9 +284,48 @@ class AsyncPromptCompressor:
         (``system``, ``context``, ``tools``, or ``memory``).
         """
         payload = {"input": text, "target_model": target_model}
+        if session_id:
+            payload["session_id"] = session_id
+        if agent:
+            payload["agent"] = agent
         resp = await self._client.post("/v1/compress/detect", json=payload)
         resp.raise_for_status()
         return _parse_detect_response(resp.json())
+
+    async def get_metrics(
+        self,
+        *,
+        session_id: Optional[str] = None,
+        agent: Optional[str] = None,
+    ) -> MetricsResponse:
+        """Fetch compression metrics from the server (async)."""
+        params: dict[str, str] = {}
+        if session_id:
+            params["session_id"] = session_id
+        if agent:
+            params["agent"] = agent
+        resp = await self._client.get("/v1/metrics", params=params)
+        resp.raise_for_status()
+        data = resp.json()
+        return MetricsResponse(
+            sessions=[
+                MetricsEntry(
+                    session_id=s["session_id"],
+                    agent=s.get("agent"),
+                    total_compressions=s["total_compressions"],
+                    total_original_tokens=s["total_original_tokens"],
+                    total_output_tokens=s["total_output_tokens"],
+                    total_savings=s["total_savings"],
+                    avg_compression_ratio=s["avg_compression_ratio"],
+                )
+                for s in data["sessions"]
+            ],
+            total_compressions=data["total_compressions"],
+            total_original_tokens=data["total_original_tokens"],
+            total_output_tokens=data["total_output_tokens"],
+            total_savings=data["total_savings"],
+            overall_compression_ratio=data["overall_compression_ratio"],
+        )
 
     async def close(self) -> None:
         await self._client.aclose()

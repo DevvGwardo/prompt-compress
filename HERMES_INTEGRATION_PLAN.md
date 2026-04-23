@@ -89,7 +89,12 @@ Make prompt-compress usable as a compression layer for hermes-agent workflows, r
   - Exposed `cache_hits` and `cache_misses` properties
   - Added 6 unit tests: disabled by default, sync system/context, async system/context, eviction
   - All 41 middleware tests pass; 158 Rust tests pass
-- [ ] Metrics endpoint: track savings per session/agent
+- [x] Metrics endpoint: track savings per session/agent
+  - Rust: `GET /v1/metrics` endpoint already returns `MetricsResponse` with per-session entries and overall totals
+  - Python SDK: `MetricsEntry` and `MetricsResponse` dataclass models added and exported in `__init__.py`
+  - `CompressRequest` updated with `session_id` and `agent` optional fields; payload builder omits None values
+  - Added Python SDK unit tests: `MetricsEntry` model, `MetricsResponse` model, payload with/without session_id+agent (15 total Python tests passing)
+  - Next: add Rust integration tests for metrics endpoint
 
 ## Completed
 - Phase 1 (Python SDK): `sdk/python/` created with `PromptCompressor` (sync) and `AsyncPromptCompressor` (async), dataclass models, `py.typed` marker, pyproject.toml with setuptools backend, 8 passing unit tests.

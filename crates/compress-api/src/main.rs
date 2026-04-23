@@ -75,6 +75,7 @@ async fn main() -> anyhow::Result<()> {
         api_key: api_key.clone(),
         http_client,
         proxy: proxy.clone(),
+        metrics: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
     };
 
     // Routes that require auth
@@ -83,6 +84,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/compress/preset/{name}", routing::post(routes::compress_preset))
         .route("/v1/compress/detect", routing::post(routes::compress_detect))
         .route("/v1/proxy/{*path}", routing::any(routes::proxy))
+        .route("/v1/metrics", routing::get(routes::metrics))
         .route_layer(axum_mw::from_fn_with_state(state.clone(), middleware::auth));
 
     let app = Router::new()

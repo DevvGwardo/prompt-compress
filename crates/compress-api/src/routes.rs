@@ -15,7 +15,7 @@ use serde_json::Value;
 
 use compress_core::{CompressionSettings, HeuristicMode};
 
-use crate::dto::{CompressDetectRequest, CompressDetectResponse, CompressPresetRequest, CompressPresetResponse, CompressRequest, CompressResponse, ErrorDetail, ErrorResponse};
+use crate::dto::{CompressDetectRequest, CompressDetectResponse, CompressPresetRequest, CompressPresetResponse, CompressRequest, CompressResponse, ErrorDetail, ErrorResponse, MetricsEntry, MetricsQuery, MetricsResponse};
 use crate::state::{AppState, ProxyConfig};
 
 #[derive(Default)]
@@ -71,6 +71,31 @@ fn bad_gateway(message: impl Into<String>) -> (StatusCode, Json<ErrorResponse>) 
     )
 }
 
+fn record_metrics(
+    state: &AppState,
+    session_id: Option<&String>,
+    agent: Option<&String>,
+    original_tokens: usize,
+    output_tokens: usize,
+    _compression_ratio: f64,
+) {
+    let sid = session_id.cloned().unwrap_or_else(|| "default".to_string());
+    let mut metrics = state.metrics.lock().unwrap();
+    let entry = metrics.entry(sid.clone()).or_insert_with(|| MetricsEntry {
+        session_id: sid,
+        agent: agent.cloned(),
+        ..Default::default()
+    });
+    entry.total_compressions += 1;
+    entry.total_original_tokens += original_tokens;
+    entry.total_output_tokens += output_tokens;
+    entry.total_savings += original_tokens.saturating_sub(output_tokens);
+    // Recalculate average compression ratio as weighted average
+    if entry.total_original_tokens > 0 {
+        entry.avg_compression_ratio = entry.total_output_tokens as f64 / entry.total_original_tokens as f64;
+    }
+}
+
 /// POST /v1/compress
 pub async fn compress(
     State(state): State<AppState>,
@@ -95,12 +120,22 @@ pub async fn compress(
     };
 
     match state.compressor.compress(&req.input, &settings) {
-        Ok(result) => Ok(Json(CompressResponse {
-            output: result.output,
-            output_tokens: result.output_tokens,
-            original_input_tokens: result.original_input_tokens,
-            compression_ratio: result.compression_ratio,
-        })),
+        Ok(result) => {
+            record_metrics(
+                &state,
+                req.session_id.as_ref(),
+                req.agent.as_ref(),
+                result.original_input_tokens,
+                result.output_tokens,
+                result.compression_ratio,
+            );
+            Ok(Json(CompressResponse {
+                output: result.output,
+                output_tokens: result.output_tokens,
+                original_input_tokens: result.original_input_tokens,
+                compression_ratio: result.compression_ratio,
+            }))
+        }
         Err(e) => Err(bad_request(e.to_string())),
     }
 }
@@ -139,13 +174,23 @@ pub async fn compress_preset(
     };
 
     match state.compressor.compress(&req.input, &settings) {
-        Ok(result) => Ok(Json(CompressPresetResponse {
-            preset: preset.clone(),
-            output: result.output,
-            output_tokens: result.output_tokens,
-            original_input_tokens: result.original_input_tokens,
-            compression_ratio: result.compression_ratio,
-        })),
+        Ok(result) => {
+            record_metrics(
+                &state,
+                req.session_id.as_ref(),
+                req.agent.as_ref(),
+                result.original_input_tokens,
+                result.output_tokens,
+                result.compression_ratio,
+            );
+            Ok(Json(CompressPresetResponse {
+                preset: preset.clone(),
+                output: result.output,
+                output_tokens: result.output_tokens,
+                original_input_tokens: result.original_input_tokens,
+                compression_ratio: result.compression_ratio,
+            }))
+        }
         Err(e) => Err(bad_request(e.to_string())),
     }
 }
@@ -206,13 +251,23 @@ pub async fn compress_detect(
     };
 
     match state.compressor.compress(&req.input, &settings) {
-        Ok(result) => Ok(Json(CompressDetectResponse {
-            detected_preset: preset.to_string(),
-            output: result.output,
-            output_tokens: result.output_tokens,
-            original_input_tokens: result.original_input_tokens,
-            compression_ratio: result.compression_ratio,
-        })),
+        Ok(result) => {
+            record_metrics(
+                &state,
+                req.session_id.as_ref(),
+                req.agent.as_ref(),
+                result.original_input_tokens,
+                result.output_tokens,
+                result.compression_ratio,
+            );
+            Ok(Json(CompressDetectResponse {
+                detected_preset: preset.to_string(),
+                output: result.output,
+                output_tokens: result.output_tokens,
+                original_input_tokens: result.original_input_tokens,
+                compression_ratio: result.compression_ratio,
+            }))
+        }
         Err(e) => Err(bad_request(e.to_string())),
     }
 }
@@ -754,6 +809,48 @@ pub async fn health() -> &'static str {
     "ok"
 }
 
+/// GET /v1/metrics
+pub async fn metrics(
+    State(state): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<MetricsQuery>,
+) -> Json<MetricsResponse> {
+    let metrics = state.metrics.lock().unwrap();
+
+    let sessions: Vec<MetricsEntry> = metrics
+        .values()
+        .filter(|entry| {
+            if let Some(ref sid) = query.session_id {
+                return &entry.session_id == sid;
+            }
+            if let Some(ref agent) = query.agent {
+                return entry.agent.as_ref() == Some(agent);
+            }
+            true
+        })
+        .cloned()
+        .collect();
+
+    let total_compressions = sessions.iter().map(|s| s.total_compressions).sum();
+    let total_original_tokens = sessions.iter().map(|s| s.total_original_tokens).sum();
+    let total_output_tokens = sessions.iter().map(|s| s.total_output_tokens).sum();
+    let total_savings = sessions.iter().map(|s| s.total_savings).sum();
+
+    let overall_compression_ratio = if total_original_tokens > 0 {
+        total_output_tokens as f64 / total_original_tokens as f64
+    } else {
+        1.0
+    };
+
+    Json(MetricsResponse {
+        sessions,
+        total_compressions,
+        total_original_tokens,
+        total_output_tokens,
+        total_savings,
+        overall_compression_ratio,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -782,6 +879,7 @@ mod tests {
                 only_if_smaller: false,
                 scorer_mode: compress_core::HeuristicMode::Standard,
             }),
+            metrics: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         }
     }
 
@@ -1088,6 +1186,7 @@ mod tests {
             api_key: None,
             http_client: reqwest::Client::new(),
             proxy: None,
+            metrics: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         }
     }
 

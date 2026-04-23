@@ -8,6 +8,8 @@ from .models import (
     CompressPresetResponse,
     CompressDetectResponse,
     CompressionSettings,
+    MetricsEntry,
+    MetricsResponse,
 )
 
 __all__ = [
@@ -20,4 +22,6 @@ __all__ = [
     "CompressPresetResponse",
     "CompressDetectResponse",
     "CompressionSettings",
+    "MetricsEntry",
+    "MetricsResponse",
 ]

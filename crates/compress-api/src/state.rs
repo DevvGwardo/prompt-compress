@@ -1,8 +1,10 @@
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use reqwest::Client;
 
 use compress_core::Compressor;
+use crate::dto::MetricsEntry;
 
 /// Shared application state.
 #[derive(Clone)]
@@ -11,6 +13,7 @@ pub struct AppState {
     pub api_key: Option<String>,
     pub http_client: Client,
     pub proxy: Option<ProxyConfig>,
+    pub metrics: Arc<Mutex<HashMap<String, MetricsEntry>>>,
 }
 
 #[derive(Clone)]

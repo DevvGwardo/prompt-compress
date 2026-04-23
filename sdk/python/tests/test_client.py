@@ -23,6 +23,11 @@ class TestModels:
         assert r.model == "scorer-v0.1"
         assert r.compression_settings.aggressiveness == 0.5
 
+    def test_compress_request_session_and_agent(self):
+        r = CompressRequest(input="hello", session_id="sess-abc", agent="hermes")
+        assert r.session_id == "sess-abc"
+        assert r.agent == "hermes"
+
     def test_compress_response_fields(self):
         r = CompressResponse(
             output="compressed",
@@ -61,6 +66,22 @@ class TestPayloadHelpers:
         assert payload["input"] == "test text"
         assert payload["compression_settings"]["aggressiveness"] == 0.3
         assert payload["compression_settings"]["target_model"] == "gpt-3.5-turbo"
+
+    def test_build_payload_with_session_and_agent(self):
+        req = CompressRequest(
+            input="test text",
+            session_id="sess-123",
+            agent="hermes-agent",
+        )
+        payload = _build_payload(req)
+        assert payload["session_id"] == "sess-123"
+        assert payload["agent"] == "hermes-agent"
+
+    def test_build_payload_without_session_and_agent(self):
+        req = CompressRequest(input="test text")
+        payload = _build_payload(req)
+        assert "session_id" not in payload
+        assert "agent" not in payload
 
     def test_parse_response(self):
         data = {
@@ -106,3 +127,48 @@ class TestAsyncClientBasics:
     def test_init(self):
         client = AsyncPromptCompressor(base_url="http://localhost:9999", api_key="test-key")
         assert client.base_url == "http://localhost:9999"
+
+
+class TestMetricsModels:
+    def test_metrics_entry_fields(self):
+        from prompt_compress import MetricsEntry
+        e = MetricsEntry(
+            session_id="sess-1",
+            agent="hermes",
+            total_compressions=10,
+            total_original_tokens=1000,
+            total_output_tokens=500,
+            total_savings=500,
+            avg_compression_ratio=0.5,
+        )
+        assert e.session_id == "sess-1"
+        assert e.agent == "hermes"
+        assert e.total_compressions == 10
+        assert e.total_original_tokens == 1000
+        assert e.total_output_tokens == 500
+        assert e.total_savings == 500
+        assert e.avg_compression_ratio == 0.5
+
+    def test_metrics_response_fields(self):
+        from prompt_compress import MetricsResponse, MetricsEntry
+        r = MetricsResponse(
+            sessions=[
+                MetricsEntry(
+                    session_id="sess-1",
+                    agent="hermes",
+                    total_compressions=1,
+                    total_original_tokens=100,
+                    total_output_tokens=50,
+                    total_savings=50,
+                    avg_compression_ratio=0.5,
+                )
+            ],
+            total_compressions=1,
+            total_original_tokens=100,
+            total_output_tokens=50,
+            total_savings=50,
+            overall_compression_ratio=0.5,
+        )
+        assert r.sessions[0].session_id == "sess-1"
+        assert r.sessions[0].agent == "hermes"
+        assert r.total_compressions == 1
