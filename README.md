@@ -498,6 +498,86 @@ Integration notes:
 - Plugin fails open (original prompt is used if compression fails)
 - See `integrations/openclaw/prompt-compress/README.md` for integration detail
 
+## Python SDK
+
+Install the Python SDK for programmatic access and framework integration:
+
+```bash
+pip install prompt-compress
+```
+
+Basic usage:
+
+```python
+from prompt_compress import PromptCompressor
+
+client = PromptCompressor(base_url="http://localhost:3000")
+result = client.compress("Your long prompt here...", aggressiveness=0.5)
+print(f"Saved {result.original_input_tokens - result.output_tokens} tokens")
+```
+
+Async support:
+
+```python
+from prompt_compress import AsyncPromptCompressor
+
+async with AsyncPromptCompressor() as client:
+    result = await client.compress("Your text...", aggressiveness=0.3)
+```
+
+### Middleware Mode (Transparent Compression)
+
+Wrap any LLM client call to transparently compress prompts:
+
+```python
+from prompt_compress import CompressMiddleware
+import openai
+
+client = openai.OpenAI()
+compress = CompressMiddleware()
+
+# All calls through this wrapper compress system prompts and context automatically
+response = compress(client.chat.completions.create)(
+    model="gpt-4",
+    messages=[
+        {"role": "system", "content": "You are a helpful assistant..."},
+        {"role": "user", "content": "Summarize this document..."},
+    ]
+)
+```
+
+Middleware features:
+
+- **System prompt compression**: configurable aggressiveness and minimum savings threshold
+- **Context compression**: preserves recent turns, compresses older history
+- **Token budget enforcement**: automatically compresses or drops messages to fit model limits
+- **Compression caching**: SHA-256-based deduplication with LRU eviction
+- **Metrics tracking**: cumulative savings, compression ratios, call counts
+
+## Hermes Agent Integration
+
+A dedicated Hermes skill is included at `hermes-skill/` and installed to `~/.hermes/skills/software-development/prompt-compress/`.
+
+The skill provides:
+
+- Pre-compression of system prompts before LLM calls
+- Post-compression of conversation context to extend window length
+- Auto-detection of prompt type (system, context, tools, memory) with appropriate presets
+- Slash command `/compress` for on-demand compression
+
+Enable in your Hermes agent config:
+
+```yaml
+plugins:
+  - prompt-compress
+```
+
+Environment:
+
+```bash
+export PROMPT_COMPRESS_BASE_URL=http://localhost:3000
+```
+
 ## Performance
 
 Benchmark harness:
@@ -583,6 +663,10 @@ prompt-compress/
 │   ├── compress-core/
 │   ├── compress-cli/
 │   └── compress-api/
+├── sdk/
+│   └── python/                  (Python SDK: client, middleware, presets)
+├── hermes-skill/                (Hermes agent skill + plugin)
+├── hermes_plugin/               (Hermes plugin Python implementation)
 ├── integrations/
 │   ├── claude-code/
 │   │   └── prompt-compress/    (UserPromptSubmit hook plugin)
