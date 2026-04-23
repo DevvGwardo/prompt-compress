@@ -82,7 +82,13 @@ Make prompt-compress usable as a compression layer for hermes-agent workflows, r
   - Tracks savings in middleware metrics
   - 9 new unit tests: `_estimate_tokens` (4), sync budget enforcement (4), async budget enforcement (1)
   - All 35 middleware tests pass; 158 Rust tests pass
-- [ ] Compression caching: hash-based dedup for repeated prompts
+- [x] Compression caching: hash-based dedup for repeated prompts
+  - Implemented `_CompressionCache` class in `middleware.py`: SHA-256 hash keys, LRU eviction, configurable max size
+  - Integrated into both `CompressMiddleware` and `AsyncCompressMiddleware` for system prompts, context, and budget enforcement
+  - Added `cache_enabled` (default False) and `cache_max_size` (default 128) parameters
+  - Exposed `cache_hits` and `cache_misses` properties
+  - Added 6 unit tests: disabled by default, sync system/context, async system/context, eviction
+  - All 41 middleware tests pass; 158 Rust tests pass
 - [ ] Metrics endpoint: track savings per session/agent
 
 ## Completed

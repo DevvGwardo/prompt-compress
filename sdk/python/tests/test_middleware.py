@@ -460,6 +460,60 @@ class TestCompressMiddleware:
         # Should drop oldest non-system messages until under budget
         assert len(out_msgs) < len(msgs)
 
+    def test_cache_disabled_by_default(self):
+        compressor = FakeCompressor(output="compressed", output_tokens=10, original_input_tokens=50)
+        mw = CompressMiddleware(fake_client, compressor)
+        msgs = [{"role": "system", "content": "X" * 200}]
+        mw(model="gpt-4", messages=msgs)
+        mw(model="gpt-4", messages=msgs)
+        # Two calls because cache is disabled by default
+        assert len([c for c in compressor.calls if c[0] == "compress_preset"]) == 2
+        assert mw.cache_hits == 0
+        assert mw.cache_misses == 0
+
+    def test_cache_enabled_system_prompt(self):
+        compressor = FakeCompressor(output="cached-sys", output_tokens=10, original_input_tokens=50)
+        mw = CompressMiddleware(fake_client, compressor, cache_enabled=True)
+        msgs = [{"role": "system", "content": "X" * 200}]
+        result1 = mw(model="gpt-4", messages=msgs)
+        result2 = mw(model="gpt-4", messages=msgs)
+        assert result1["kwargs"]["messages"][0]["content"] == "cached-sys"
+        assert result2["kwargs"]["messages"][0]["content"] == "cached-sys"
+        # Only one API call because the second was served from cache
+        assert len([c for c in compressor.calls if c[0] == "compress_preset"]) == 1
+        assert mw.cache_hits == 1
+        assert mw.cache_misses == 1
+
+    def test_cache_enabled_context(self):
+        compressor = FakeCompressor(output="cached-ctx", output_tokens=8, original_input_tokens=30)
+        mw = CompressMiddleware(fake_client, compressor, compress_system=False, cache_enabled=True)
+        msgs = [
+            {"role": "user", "content": "Old 1"},
+            {"role": "assistant", "content": "A1"},
+            {"role": "user", "content": "Old 2"},
+            {"role": "assistant", "content": "A2"},
+            {"role": "user", "content": "New"},
+            {"role": "assistant", "content": "A3"},
+        ]
+        mw(model="gpt-4", messages=msgs)
+        mw(model="gpt-4", messages=msgs)
+        assert len([c for c in compressor.calls if c[0] == "compress"]) == 1
+        assert mw.cache_hits == 1
+        assert mw.cache_misses == 1
+
+    def test_cache_eviction(self):
+        compressor = FakeCompressor(output="cached", output_tokens=10, original_input_tokens=50)
+        mw = CompressMiddleware(fake_client, compressor, cache_enabled=True, cache_max_size=1)
+        msgs_a = [{"role": "system", "content": "A" * 200}]
+        msgs_b = [{"role": "system", "content": "B" * 200}]
+        mw(model="gpt-4", messages=msgs_a)
+        mw(model="gpt-4", messages=msgs_b)
+        mw(model="gpt-4", messages=msgs_a)
+        # First call miss, second call miss (evicts A), third call miss (A was evicted)
+        assert len([c for c in compressor.calls if c[0] == "compress_preset"]) == 3
+        assert mw.cache_hits == 0
+        assert mw.cache_misses == 3
+
 
 # ---------------------------------------------------------------------------
 # Async middleware tests
@@ -572,3 +626,32 @@ class TestAsyncCompressMiddleware:
         assert any(call == ("compress", 0.7) for call in compressor.calls)
         assert out_msgs[0]["role"] == "system"
         assert "tiny" in out_msgs[0]["content"]
+
+    async def test_cache_enabled_async_system_prompt(self):
+        compressor = FakeAsyncCompressor(output="cached-sys", output_tokens=10, original_input_tokens=50)
+        mw = AsyncCompressMiddleware(fake_async_client, compressor, cache_enabled=True)
+        msgs = [{"role": "system", "content": "X" * 200}]
+        result1 = await mw(model="gpt-4", messages=msgs)
+        result2 = await mw(model="gpt-4", messages=msgs)
+        assert result1["kwargs"]["messages"][0]["content"] == "cached-sys"
+        assert result2["kwargs"]["messages"][0]["content"] == "cached-sys"
+        assert len([c for c in compressor.calls if c[0] == "compress_preset"]) == 1
+        assert mw.cache_hits == 1
+        assert mw.cache_misses == 1
+
+    async def test_cache_enabled_async_context(self):
+        compressor = FakeAsyncCompressor(output="cached-ctx", output_tokens=8, original_input_tokens=30)
+        mw = AsyncCompressMiddleware(fake_async_client, compressor, compress_system=False, cache_enabled=True)
+        msgs = [
+            {"role": "user", "content": "Old 1"},
+            {"role": "assistant", "content": "A1"},
+            {"role": "user", "content": "Old 2"},
+            {"role": "assistant", "content": "A2"},
+            {"role": "user", "content": "New"},
+            {"role": "assistant", "content": "A3"},
+        ]
+        await mw(model="gpt-4", messages=msgs)
+        await mw(model="gpt-4", messages=msgs)
+        assert len([c for c in compressor.calls if c[0] == "compress"]) == 1
+        assert mw.cache_hits == 1
+        assert mw.cache_misses == 1

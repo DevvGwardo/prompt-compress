@@ -25,14 +25,52 @@ Usage::
 
 from __future__ import annotations
 
-import copy
+import hashlib
+import json
 import logging
+import copy
+from collections import OrderedDict
 from typing import Any, Callable, Optional
 
 from .client import AsyncPromptCompressor, PromptCompressor
 from .models import CompressResponse
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Compression cache
+# ---------------------------------------------------------------------------
+
+class _CompressionCache:
+    """Simple hash-based LRU cache for compression responses."""
+
+    def __init__(self, max_size: int = 128) -> None:
+        self._cache: OrderedDict[str, Any] = OrderedDict()
+        self.max_size = max_size
+        self.hits = 0
+        self.misses = 0
+
+    @staticmethod
+    def _make_key(text: str, **params: Any) -> str:
+        key_data = json.dumps({"text": text, **params}, sort_keys=True, ensure_ascii=True)
+        return hashlib.sha256(key_data.encode("utf-8")).hexdigest()
+
+    def get(self, text: str, **params: Any) -> Any | None:
+        key = self._make_key(text, **params)
+        if key in self._cache:
+            self._cache.move_to_end(key)
+            self.hits += 1
+            return self._cache[key]
+        self.misses += 1
+        return None
+
+    def set(self, text: str, response: Any, **params: Any) -> None:
+        key = self._make_key(text, **params)
+        self._cache[key] = response
+        self._cache.move_to_end(key)
+        if len(self._cache) > self.max_size:
+            self._cache.popitem(last=False)
+
 
 # ---------------------------------------------------------------------------
 # Default configuration values
@@ -71,6 +109,8 @@ class _MiddlewareConfig:
         scorer_model: str = "heuristic-agent-v0.1",
         on_error: str = "warn",
         token_budget: Optional[int] = None,
+        cache_enabled: bool = False,
+        cache_max_size: int = 128,
     ) -> None:
         self.compress_system = compress_system
         self.compress_context = compress_context
@@ -84,6 +124,8 @@ class _MiddlewareConfig:
         self.scorer_model = scorer_model
         self.on_error = on_error  # "warn", "raise", "ignore"
         self.token_budget = token_budget
+        self.cache_enabled = cache_enabled
+        self.cache_max_size = cache_max_size
 
 
 # ---------------------------------------------------------------------------
@@ -251,6 +293,8 @@ class CompressMiddleware:
         scorer_model: str = "heuristic-agent-v0.1",
         on_error: str = "warn",
         token_budget: Optional[int] = None,
+        cache_enabled: bool = False,
+        cache_max_size: int = 128,
     ) -> None:
         self._client = client
         self._compressor = compressor
@@ -267,11 +311,24 @@ class CompressMiddleware:
             scorer_model=scorer_model,
             on_error=on_error,
             token_budget=token_budget,
+            cache_enabled=cache_enabled,
+            cache_max_size=cache_max_size,
         )
+        self._cache = _CompressionCache(cache_max_size) if cache_enabled else None
         self.total_input_tokens: int = 0
         self.total_output_tokens: int = 0
         self.total_savings: int = 0
         self.calls_made: int = 0
+
+    @property
+    def cache_hits(self) -> int:
+        """Number of cache hits since creation."""
+        return self._cache.hits if self._cache else 0
+
+    @property
+    def cache_misses(self) -> int:
+        """Number of cache misses since creation."""
+        return self._cache.misses if self._cache else 0
 
     @property
     def compression_ratio(self) -> float:
@@ -292,18 +349,29 @@ class CompressMiddleware:
         if not system_text or len(system_text) < self._cfg.system_min_chars:
             return None
 
-        try:
-            resp = self._compressor.compress_preset(
-                system_text,
-                self._cfg.system_preset,
-                target_model=self._cfg.target_model,
+        resp = None
+        if self._cache is not None:
+            resp = self._cache.get(
+                system_text, preset=self._cfg.system_preset, target_model=self._cfg.target_model
             )
-        except Exception as exc:
-            if self._cfg.on_error == "raise":
-                raise
-            if self._cfg.on_error == "warn":
-                logger.warning("System prompt compression failed: %s", exc)
-            return None
+
+        if resp is None:
+            try:
+                resp = self._compressor.compress_preset(
+                    system_text,
+                    self._cfg.system_preset,
+                    target_model=self._cfg.target_model,
+                )
+            except Exception as exc:
+                if self._cfg.on_error == "raise":
+                    raise
+                if self._cfg.on_error == "warn":
+                    logger.warning("System prompt compression failed: %s", exc)
+                return None
+            if self._cache is not None:
+                self._cache.set(
+                    system_text, resp, preset=self._cfg.system_preset, target_model=self._cfg.target_model
+                )
 
         savings = resp.original_input_tokens - resp.output_tokens
         if savings < self._cfg.system_min_savings:
@@ -337,19 +405,37 @@ class CompressMiddleware:
         if not serialized.strip():
             return None
 
-        try:
-            resp = self._compressor.compress(
+        resp = None
+        if self._cache is not None:
+            resp = self._cache.get(
                 serialized,
                 aggressiveness=0.5,
                 target_model=self._cfg.target_model,
                 model=self._cfg.scorer_model,
             )
-        except Exception as exc:
-            if self._cfg.on_error == "raise":
-                raise
-            if self._cfg.on_error == "warn":
-                logger.warning("Context compression failed: %s", exc)
-            return None
+
+        if resp is None:
+            try:
+                resp = self._compressor.compress(
+                    serialized,
+                    aggressiveness=0.5,
+                    target_model=self._cfg.target_model,
+                    model=self._cfg.scorer_model,
+                )
+            except Exception as exc:
+                if self._cfg.on_error == "raise":
+                    raise
+                if self._cfg.on_error == "warn":
+                    logger.warning("Context compression failed: %s", exc)
+                return None
+            if self._cache is not None:
+                self._cache.set(
+                    serialized,
+                    resp,
+                    aggressiveness=0.5,
+                    target_model=self._cfg.target_model,
+                    model=self._cfg.scorer_model,
+                )
 
         savings = resp.original_input_tokens - resp.output_tokens
         if savings < self._cfg.context_min_savings:
@@ -398,23 +484,41 @@ class CompressMiddleware:
                 serialized = _serialize_messages(old_messages)
                 if not serialized.strip():
                     break
-                try:
-                    resp = self._compressor.compress(
+                resp = None
+                if self._cache is not None:
+                    resp = self._cache.get(
                         serialized,
                         aggressiveness=aggressiveness,
                         target_model=self._cfg.target_model,
                         model=self._cfg.scorer_model,
                     )
-                except Exception as exc:
-                    if self._cfg.on_error == "raise":
-                        raise
-                    if self._cfg.on_error == "warn":
-                        logger.warning(
-                            "Budget context compression failed at aggressiveness %.1f: %s",
-                            aggressiveness,
-                            exc,
+
+                if resp is None:
+                    try:
+                        resp = self._compressor.compress(
+                            serialized,
+                            aggressiveness=aggressiveness,
+                            target_model=self._cfg.target_model,
+                            model=self._cfg.scorer_model,
                         )
-                    break
+                    except Exception as exc:
+                        if self._cfg.on_error == "raise":
+                            raise
+                        if self._cfg.on_error == "warn":
+                            logger.warning(
+                                "Budget context compression failed at aggressiveness %.1f: %s",
+                                aggressiveness,
+                                exc,
+                            )
+                        break
+                    if self._cache is not None:
+                        self._cache.set(
+                            serialized,
+                            resp,
+                            aggressiveness=aggressiveness,
+                            target_model=self._cfg.target_model,
+                            model=self._cfg.scorer_model,
+                        )
 
                 working = _replace_old_context(working, resp.output, self._cfg.protected_turns)
                 estimated = _estimate_tokens(working)
@@ -507,6 +611,8 @@ class AsyncCompressMiddleware:
         scorer_model: str = "heuristic-agent-v0.1",
         on_error: str = "warn",
         token_budget: Optional[int] = None,
+        cache_enabled: bool = False,
+        cache_max_size: int = 128,
     ) -> None:
         self._client = client
         self._compressor = compressor
@@ -523,11 +629,24 @@ class AsyncCompressMiddleware:
             scorer_model=scorer_model,
             on_error=on_error,
             token_budget=token_budget,
+            cache_enabled=cache_enabled,
+            cache_max_size=cache_max_size,
         )
+        self._cache = _CompressionCache(cache_max_size) if cache_enabled else None
         self.total_input_tokens: int = 0
         self.total_output_tokens: int = 0
         self.total_savings: int = 0
         self.calls_made: int = 0
+
+    @property
+    def cache_hits(self) -> int:
+        """Number of cache hits since creation."""
+        return self._cache.hits if self._cache else 0
+
+    @property
+    def cache_misses(self) -> int:
+        """Number of cache misses since creation."""
+        return self._cache.misses if self._cache else 0
 
     @property
     def compression_ratio(self) -> float:
@@ -544,18 +663,29 @@ class AsyncCompressMiddleware:
         if not system_text or len(system_text) < self._cfg.system_min_chars:
             return None
 
-        try:
-            resp = await self._compressor.compress_preset(
-                system_text,
-                self._cfg.system_preset,
-                target_model=self._cfg.target_model,
+        resp = None
+        if self._cache is not None:
+            resp = self._cache.get(
+                system_text, preset=self._cfg.system_preset, target_model=self._cfg.target_model
             )
-        except Exception as exc:
-            if self._cfg.on_error == "raise":
-                raise
-            if self._cfg.on_error == "warn":
-                logger.warning("System prompt compression failed: %s", exc)
-            return None
+
+        if resp is None:
+            try:
+                resp = await self._compressor.compress_preset(
+                    system_text,
+                    self._cfg.system_preset,
+                    target_model=self._cfg.target_model,
+                )
+            except Exception as exc:
+                if self._cfg.on_error == "raise":
+                    raise
+                if self._cfg.on_error == "warn":
+                    logger.warning("System prompt compression failed: %s", exc)
+                return None
+            if self._cache is not None:
+                self._cache.set(
+                    system_text, resp, preset=self._cfg.system_preset, target_model=self._cfg.target_model
+                )
 
         savings = resp.original_input_tokens - resp.output_tokens
         if savings < self._cfg.system_min_savings:
@@ -579,19 +709,37 @@ class AsyncCompressMiddleware:
         if not serialized.strip():
             return None
 
-        try:
-            resp = await self._compressor.compress(
+        resp = None
+        if self._cache is not None:
+            resp = self._cache.get(
                 serialized,
                 aggressiveness=0.5,
                 target_model=self._cfg.target_model,
                 model=self._cfg.scorer_model,
             )
-        except Exception as exc:
-            if self._cfg.on_error == "raise":
-                raise
-            if self._cfg.on_error == "warn":
-                logger.warning("Context compression failed: %s", exc)
-            return None
+
+        if resp is None:
+            try:
+                resp = await self._compressor.compress(
+                    serialized,
+                    aggressiveness=0.5,
+                    target_model=self._cfg.target_model,
+                    model=self._cfg.scorer_model,
+                )
+            except Exception as exc:
+                if self._cfg.on_error == "raise":
+                    raise
+                if self._cfg.on_error == "warn":
+                    logger.warning("Context compression failed: %s", exc)
+                return None
+            if self._cache is not None:
+                self._cache.set(
+                    serialized,
+                    resp,
+                    aggressiveness=0.5,
+                    target_model=self._cfg.target_model,
+                    model=self._cfg.scorer_model,
+                )
 
         savings = resp.original_input_tokens - resp.output_tokens
         if savings < self._cfg.context_min_savings:
@@ -627,23 +775,41 @@ class AsyncCompressMiddleware:
                 serialized = _serialize_messages(old_messages)
                 if not serialized.strip():
                     break
-                try:
-                    resp = await self._compressor.compress(
+                resp = None
+                if self._cache is not None:
+                    resp = self._cache.get(
                         serialized,
                         aggressiveness=aggressiveness,
                         target_model=self._cfg.target_model,
                         model=self._cfg.scorer_model,
                     )
-                except Exception as exc:
-                    if self._cfg.on_error == "raise":
-                        raise
-                    if self._cfg.on_error == "warn":
-                        logger.warning(
-                            "Budget context compression failed at aggressiveness %.1f: %s",
-                            aggressiveness,
-                            exc,
+
+                if resp is None:
+                    try:
+                        resp = await self._compressor.compress(
+                            serialized,
+                            aggressiveness=aggressiveness,
+                            target_model=self._cfg.target_model,
+                            model=self._cfg.scorer_model,
                         )
-                    break
+                    except Exception as exc:
+                        if self._cfg.on_error == "raise":
+                            raise
+                        if self._cfg.on_error == "warn":
+                            logger.warning(
+                                "Budget context compression failed at aggressiveness %.1f: %s",
+                                aggressiveness,
+                                exc,
+                            )
+                        break
+                    if self._cache is not None:
+                        self._cache.set(
+                            serialized,
+                            resp,
+                            aggressiveness=aggressiveness,
+                            target_model=self._cfg.target_model,
+                            model=self._cfg.scorer_model,
+                        )
 
                 working = _replace_old_context(working, resp.output, self._cfg.protected_turns)
                 estimated = _estimate_tokens(working)
