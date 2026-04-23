@@ -9,6 +9,7 @@ from prompt_compress.middleware import (
     _replace_system_messages,
     _serialize_messages,
     _replace_old_context,
+    _estimate_tokens,
 )
 from prompt_compress.models import CompressResponse, CompressPresetResponse
 
@@ -193,6 +194,36 @@ class TestReplaceOldContext:
         assert result == msgs
 
 
+class TestEstimateTokens:
+    def test_empty(self):
+        assert _estimate_tokens([]) == 0
+
+    def test_plain_text(self):
+        msgs = [{"role": "user", "content": "a" * 40}]
+        # 40 chars / 4 = 10 tokens + 2 overhead = 12
+        assert _estimate_tokens(msgs) == 12
+
+    def test_multiple_messages(self):
+        msgs = [
+            {"role": "system", "content": "a" * 40},
+            {"role": "user", "content": "b" * 40},
+        ]
+        # (40+40)/4 = 20 + 2*2 = 24
+        assert _estimate_tokens(msgs) == 24
+
+    def test_multimodal_content(self):
+        msgs = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "a" * 40},
+                    {"type": "image", "url": "http://x.com/i.png"},
+                ],
+            }
+        ]
+        assert _estimate_tokens(msgs) == 12
+
+
 # ---------------------------------------------------------------------------
 # Sync middleware tests
 # ---------------------------------------------------------------------------
@@ -323,6 +354,112 @@ class TestCompressMiddleware:
         mw = CompressMiddleware(fake_client, FakeCompressor())
         assert mw.compression_ratio == 0.0
 
+    def test_token_budget_no_enforcement_when_none(self):
+        compressor = FakeCompressor()
+        mw = CompressMiddleware(fake_client, compressor)
+        msgs = [
+            {"role": "system", "content": "X" * 200},
+            {"role": "user", "content": "Hello"},
+        ]
+        result = mw(model="gpt-4", messages=msgs)
+        # Should still compress system as normal
+        assert result["kwargs"]["messages"][0]["content"] == "compressed"
+
+    def test_token_budget_under_limit_no_change(self):
+        compressor = FakeCompressor()
+        mw = CompressMiddleware(fake_client, compressor, token_budget=500)
+        msgs = [
+            {"role": "system", "content": "X" * 200},
+            {"role": "user", "content": "Hello"},
+        ]
+        result = mw(model="gpt-4", messages=msgs)
+        out_msgs = result["kwargs"]["messages"]
+        assert out_msgs[0]["content"] == "compressed"
+        assert out_msgs[1]["content"] == "Hello"
+
+    def test_token_budget_triggers_recompression(self):
+        # Create a compressor that returns smaller output at higher aggressiveness
+        class BudgetCompressor:
+            def __init__(self):
+                self.calls = []
+
+            def compress_preset(self, text, preset, *, target_model="gpt-4"):
+                self.calls.append(("compress_preset", preset))
+                return CompressPresetResponse(
+                    preset=preset,
+                    output="compressed-sys",
+                    output_tokens=10,
+                    original_input_tokens=50,
+                    compression_ratio=0.8,
+                )
+
+            def compress(self, text, *, aggressiveness=0.5, target_model="gpt-4", model="scorer-v0.1"):
+                self.calls.append(("compress", aggressiveness))
+                # At higher aggressiveness, return much smaller output
+                if aggressiveness >= 0.7:
+                    return CompressResponse(
+                        output="tiny",
+                        output_tokens=2,
+                        original_input_tokens=30,
+                        compression_ratio=0.93,
+                    )
+                return CompressResponse(
+                    output="compressed-ctx",
+                    output_tokens=20,
+                    original_input_tokens=30,
+                    compression_ratio=0.33,
+                )
+
+        compressor = BudgetCompressor()
+        mw = CompressMiddleware(fake_client, compressor, token_budget=20, compress_system=False)
+        # 6 messages -> 2 pairs protected = 4 protected, 2 old messages
+        msgs = [
+            {"role": "user", "content": "Old message one here"},
+            {"role": "assistant", "content": "Assistant reply number one"},
+            {"role": "user", "content": "Old message two here"},
+            {"role": "assistant", "content": "Assistant reply number two"},
+            {"role": "user", "content": "New user message here"},
+            {"role": "assistant", "content": "New assistant reply here"},
+        ]
+        result = mw(model="gpt-4", messages=msgs)
+        out_msgs = result["kwargs"]["messages"]
+        # Should have re-compressed at higher aggressiveness
+        assert any(call == ("compress", 0.7) for call in compressor.calls)
+        assert out_msgs[0]["role"] == "system"
+        assert "tiny" in out_msgs[0]["content"]
+
+    def test_token_budget_drops_messages_when_recompression_insufficient(self):
+        class NoBudgetCompressor:
+            def compress_preset(self, text, preset, *, target_model="gpt-4"):
+                return CompressPresetResponse(
+                    preset=preset,
+                    output="compressed-sys",
+                    output_tokens=10,
+                    original_input_tokens=50,
+                    compression_ratio=0.8,
+                )
+
+            def compress(self, text, *, aggressiveness=0.5, target_model="gpt-4", model="scorer-v0.1"):
+                return CompressResponse(
+                    output="still-big",
+                    output_tokens=25,
+                    original_input_tokens=30,
+                    compression_ratio=0.17,
+                )
+
+        compressor = NoBudgetCompressor()
+        mw = CompressMiddleware(fake_client, compressor, token_budget=10, compress_system=False)
+        msgs = [
+            {"role": "user", "content": "First message content"},
+            {"role": "assistant", "content": "Assistant reply one content"},
+            {"role": "user", "content": "Second message content"},
+            {"role": "assistant", "content": "Assistant reply two content"},
+        ]
+        result = mw(model="gpt-4", messages=msgs)
+        out_msgs = result["kwargs"]["messages"]
+        # Should drop oldest non-system messages until under budget
+        assert len(out_msgs) < len(msgs)
+
 
 # ---------------------------------------------------------------------------
 # Async middleware tests
@@ -388,3 +525,50 @@ class TestAsyncCompressMiddleware:
         result = await mw(model="gpt-4", messages=msgs)
         assert result["kwargs"]["messages"][0]["content"] == "X" * 200
         assert mw.calls_made == 0
+
+    async def test_token_budget_async_enforcement(self):
+        class BudgetAsyncCompressor:
+            def __init__(self):
+                self.calls = []
+
+            async def compress_preset(self, text, preset, *, target_model="gpt-4"):
+                self.calls.append(("compress_preset", preset))
+                return CompressPresetResponse(
+                    preset=preset,
+                    output="compressed-sys",
+                    output_tokens=10,
+                    original_input_tokens=50,
+                    compression_ratio=0.8,
+                )
+
+            async def compress(self, text, *, aggressiveness=0.5, target_model="gpt-4", model="scorer-v0.1"):
+                self.calls.append(("compress", aggressiveness))
+                if aggressiveness >= 0.7:
+                    return CompressResponse(
+                        output="tiny",
+                        output_tokens=2,
+                        original_input_tokens=30,
+                        compression_ratio=0.93,
+                    )
+                return CompressResponse(
+                    output="compressed-ctx",
+                    output_tokens=20,
+                    original_input_tokens=30,
+                    compression_ratio=0.33,
+                )
+
+        compressor = BudgetAsyncCompressor()
+        mw = AsyncCompressMiddleware(fake_async_client, compressor, token_budget=20, compress_system=False)
+        msgs = [
+            {"role": "user", "content": "Old message one here"},
+            {"role": "assistant", "content": "Assistant reply number one"},
+            {"role": "user", "content": "Old message two here"},
+            {"role": "assistant", "content": "Assistant reply number two"},
+            {"role": "user", "content": "New user message here"},
+            {"role": "assistant", "content": "New assistant reply here"},
+        ]
+        result = await mw(model="gpt-4", messages=msgs)
+        out_msgs = result["kwargs"]["messages"]
+        assert any(call == ("compress", 0.7) for call in compressor.calls)
+        assert out_msgs[0]["role"] == "system"
+        assert "tiny" in out_msgs[0]["content"]

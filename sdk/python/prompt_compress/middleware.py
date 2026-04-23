@@ -26,9 +26,8 @@ Usage::
 from __future__ import annotations
 
 import copy
-import functools
 import logging
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 from .client import AsyncPromptCompressor, PromptCompressor
 from .models import CompressResponse
@@ -43,6 +42,15 @@ _DEFAULT_SYSTEM_MIN_CHARS = 150
 _DEFAULT_SYSTEM_MIN_SAVINGS = 5
 _DEFAULT_CONTEXT_MIN_SAVINGS = 10
 _DEFAULT_PROTECTED_TURNS = 2
+
+# Rough heuristic: ~4 characters per token for English text with GPT tokenizers.
+_CHARS_PER_TOKEN = 4.0
+
+# Maximum aggressiveness when enforcing a token budget.
+_MAX_BUDGET_AGGRESSIVENESS = 0.9
+
+# Step size for increasing aggressiveness during budget enforcement.
+_AGGRESSIVENESS_STEP = 0.1
 
 
 class _MiddlewareConfig:
@@ -62,6 +70,7 @@ class _MiddlewareConfig:
         target_model: str = "gpt-4",
         scorer_model: str = "heuristic-agent-v0.1",
         on_error: str = "warn",
+        token_budget: Optional[int] = None,
     ) -> None:
         self.compress_system = compress_system
         self.compress_context = compress_context
@@ -74,6 +83,7 @@ class _MiddlewareConfig:
         self.target_model = target_model
         self.scorer_model = scorer_model
         self.on_error = on_error  # "warn", "raise", "ignore"
+        self.token_budget = token_budget
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +162,29 @@ def _replace_old_context(
     return [summary_msg] + preserved
 
 
+def _estimate_tokens(messages: list[dict]) -> int:
+    """Estimate token count for a message list using a chars-per-token heuristic.
+
+    This is a rough approximation (~4 chars/token) sufficient for budget
+    enforcement. For more accurate counts the API itself should be used.
+    """
+    total_chars = 0
+    for msg in messages:
+        content = msg.get("content", "")
+        if isinstance(content, list):
+            text_parts = [
+                str(block.get("text", ""))
+                for block in content
+                if isinstance(block, dict) and block.get("type") in ("text", "input_text")
+            ]
+            text = " ".join(text_parts)
+        else:
+            text = str(content)
+        total_chars += len(text)
+    # Add a small overhead per message for role labels / formatting.
+    return int(total_chars / _CHARS_PER_TOKEN) + len(messages) * 2
+
+
 # ---------------------------------------------------------------------------
 # Sync middleware
 # ---------------------------------------------------------------------------
@@ -194,6 +227,11 @@ class CompressMiddleware:
     on_error:
         How to handle compression failures: ``"warn"`` (log and continue
         with original messages), ``"raise"``, or ``"ignore"``.
+    token_budget:
+        Optional maximum token budget. If set, the middleware will
+        iteratively increase compression aggressiveness (and, if
+        necessary, drop old messages) until the estimated token count
+        falls within the budget.
     """
 
     def __init__(
@@ -212,6 +250,7 @@ class CompressMiddleware:
         target_model: str = "gpt-4",
         scorer_model: str = "heuristic-agent-v0.1",
         on_error: str = "warn",
+        token_budget: Optional[int] = None,
     ) -> None:
         self._client = client
         self._compressor = compressor
@@ -227,6 +266,7 @@ class CompressMiddleware:
             target_model=target_model,
             scorer_model=scorer_model,
             on_error=on_error,
+            token_budget=token_budget,
         )
         self.total_input_tokens: int = 0
         self.total_output_tokens: int = 0
@@ -326,6 +366,86 @@ class CompressMiddleware:
         )
         return _replace_old_context(messages, resp.output, self._cfg.protected_turns)
 
+    def _enforce_budget(self, messages: list[dict]) -> list[dict]:
+        """Ensure messages fit within ``token_budget`` by increasing aggressiveness.
+
+        If the estimated token count exceeds the budget, the method first
+        attempts to re-compress the old context with progressively higher
+        aggressiveness. If that still doesn't fit, it drops the oldest
+        non-system messages until the budget is satisfied.
+        """
+        if self._cfg.token_budget is None:
+            return messages
+
+        estimated = _estimate_tokens(messages)
+        if estimated <= self._cfg.token_budget:
+            return messages
+
+        logger.debug(
+            "Token budget exceeded: estimated %d > budget %d",
+            estimated,
+            self._cfg.token_budget,
+        )
+
+        working = list(messages)
+        protect_count = self._cfg.protected_turns * 2
+
+        # Try increasing aggressiveness on context first.
+        if self._cfg.compress_context and len(working) > protect_count:
+            aggressiveness = 0.5 + _AGGRESSIVENESS_STEP
+            while aggressiveness <= _MAX_BUDGET_AGGRESSIVENESS + 1e-9:
+                old_messages = working[: len(working) - protect_count]
+                serialized = _serialize_messages(old_messages)
+                if not serialized.strip():
+                    break
+                try:
+                    resp = self._compressor.compress(
+                        serialized,
+                        aggressiveness=aggressiveness,
+                        target_model=self._cfg.target_model,
+                        model=self._cfg.scorer_model,
+                    )
+                except Exception as exc:
+                    if self._cfg.on_error == "raise":
+                        raise
+                    if self._cfg.on_error == "warn":
+                        logger.warning(
+                            "Budget context compression failed at aggressiveness %.1f: %s",
+                            aggressiveness,
+                            exc,
+                        )
+                    break
+
+                working = _replace_old_context(working, resp.output, self._cfg.protected_turns)
+                estimated = _estimate_tokens(working)
+                if estimated <= self._cfg.token_budget:
+                    self.total_input_tokens += resp.original_input_tokens
+                    self.total_output_tokens += resp.output_tokens
+                    self.total_savings += resp.original_input_tokens - resp.output_tokens
+                    logger.debug(
+                        "Budget enforced via re-compression (%.1f): %d → %d tokens",
+                        aggressiveness,
+                        resp.original_input_tokens,
+                        resp.output_tokens,
+                    )
+                    return working
+                aggressiveness += _AGGRESSIVENESS_STEP
+
+        # Last resort: drop oldest non-system messages.
+        while _estimate_tokens(working) > self._cfg.token_budget and len(working) > 1:
+            # Find the first non-system message to drop.
+            drop_idx = None
+            for i, msg in enumerate(working):
+                if msg.get("role") != "system":
+                    drop_idx = i
+                    break
+            if drop_idx is None:
+                break
+            dropped = working.pop(drop_idx)
+            logger.debug("Dropped message to meet budget: %s", dropped.get("role", "unknown"))
+
+        return working
+
     def __call__(self, *args, **kwargs) -> Any:
         """Intercept the call, compress messages, and forward to the client."""
         messages = kwargs.get("messages")
@@ -345,6 +465,12 @@ class CompressMiddleware:
         result = self._maybe_compress_context(working)
         if result is not None:
             working = result
+            modified = True
+
+        # 3. Token budget enforcement
+        budgeted = self._enforce_budget(working)
+        if budgeted is not working:
+            working = budgeted
             modified = True
 
         if modified:
@@ -380,6 +506,7 @@ class AsyncCompressMiddleware:
         target_model: str = "gpt-4",
         scorer_model: str = "heuristic-agent-v0.1",
         on_error: str = "warn",
+        token_budget: Optional[int] = None,
     ) -> None:
         self._client = client
         self._compressor = compressor
@@ -395,6 +522,7 @@ class AsyncCompressMiddleware:
             target_model=target_model,
             scorer_model=scorer_model,
             on_error=on_error,
+            token_budget=token_budget,
         )
         self.total_input_tokens: int = 0
         self.total_output_tokens: int = 0
@@ -474,6 +602,77 @@ class AsyncCompressMiddleware:
         self.total_savings += savings
         return _replace_old_context(messages, resp.output, self._cfg.protected_turns)
 
+    async def _enforce_budget(self, messages: list[dict]) -> list[dict]:
+        """Async version of budget enforcement."""
+        if self._cfg.token_budget is None:
+            return messages
+
+        estimated = _estimate_tokens(messages)
+        if estimated <= self._cfg.token_budget:
+            return messages
+
+        logger.debug(
+            "Token budget exceeded: estimated %d > budget %d",
+            estimated,
+            self._cfg.token_budget,
+        )
+
+        working = list(messages)
+        protect_count = self._cfg.protected_turns * 2
+
+        if self._cfg.compress_context and len(working) > protect_count:
+            aggressiveness = 0.5 + _AGGRESSIVENESS_STEP
+            while aggressiveness <= _MAX_BUDGET_AGGRESSIVENESS + 1e-9:
+                old_messages = working[: len(working) - protect_count]
+                serialized = _serialize_messages(old_messages)
+                if not serialized.strip():
+                    break
+                try:
+                    resp = await self._compressor.compress(
+                        serialized,
+                        aggressiveness=aggressiveness,
+                        target_model=self._cfg.target_model,
+                        model=self._cfg.scorer_model,
+                    )
+                except Exception as exc:
+                    if self._cfg.on_error == "raise":
+                        raise
+                    if self._cfg.on_error == "warn":
+                        logger.warning(
+                            "Budget context compression failed at aggressiveness %.1f: %s",
+                            aggressiveness,
+                            exc,
+                        )
+                    break
+
+                working = _replace_old_context(working, resp.output, self._cfg.protected_turns)
+                estimated = _estimate_tokens(working)
+                if estimated <= self._cfg.token_budget:
+                    self.total_input_tokens += resp.original_input_tokens
+                    self.total_output_tokens += resp.output_tokens
+                    self.total_savings += resp.original_input_tokens - resp.output_tokens
+                    logger.debug(
+                        "Budget enforced via re-compression (%.1f): %d → %d tokens",
+                        aggressiveness,
+                        resp.original_input_tokens,
+                        resp.output_tokens,
+                    )
+                    return working
+                aggressiveness += _AGGRESSIVENESS_STEP
+
+        while _estimate_tokens(working) > self._cfg.token_budget and len(working) > 1:
+            drop_idx = None
+            for i, msg in enumerate(working):
+                if msg.get("role") != "system":
+                    drop_idx = i
+                    break
+            if drop_idx is None:
+                break
+            dropped = working.pop(drop_idx)
+            logger.debug("Dropped message to meet budget: %s", dropped.get("role", "unknown"))
+
+        return working
+
     async def __call__(self, *args, **kwargs) -> Any:
         messages = kwargs.get("messages")
         if not messages:
@@ -490,6 +689,12 @@ class AsyncCompressMiddleware:
         result = await self._maybe_compress_context(working)
         if result is not None:
             working = result
+            modified = True
+
+        # 3. Token budget enforcement
+        budgeted = await self._enforce_budget(working)
+        if budgeted is not working:
+            working = budgeted
             modified = True
 
         if modified:

@@ -74,7 +74,14 @@ Make prompt-compress usable as a compression layer for hermes-agent workflows, r
   - Error handling modes: `warn` (log + continue), `raise`, `ignore`
   - Supports multimodal content blocks (extracts text parts)
   - 26 Python SDK unit tests added (helpers + sync + async middleware), all passing
-- [ ] Token budget enforcement: compress to fit within model limits
+- [x] Token budget enforcement: compress to fit within model limits
+  - Added `token_budget` parameter to `CompressMiddleware` and `AsyncCompressMiddleware`
+  - `_estimate_tokens()` helper uses ~4 chars/token heuristic + message overhead
+  - When budget is exceeded, iteratively re-compresses context with increasing aggressiveness (0.6 → 0.9)
+  - Falls back to dropping oldest non-system messages if re-compression insufficient
+  - Tracks savings in middleware metrics
+  - 9 new unit tests: `_estimate_tokens` (4), sync budget enforcement (4), async budget enforcement (1)
+  - All 35 middleware tests pass; 158 Rust tests pass
 - [ ] Compression caching: hash-based dedup for repeated prompts
 - [ ] Metrics endpoint: track savings per session/agent
 
