@@ -191,6 +191,18 @@ class PromptCompressor:
             overall_compression_ratio=data["overall_compression_ratio"],
         )
 
+    def health_check(self) -> bool:
+        """Check whether the prompt-compress API server is healthy.
+
+        Returns ``True`` if the server responds with a 200 status on the
+        ``/health`` endpoint, ``False`` otherwise.
+        """
+        try:
+            resp = self._client.get("/health")
+            return resp.status_code == 200
+        except Exception:
+            return False
+
     def close(self) -> None:
         self._client.close()
 
@@ -326,6 +338,18 @@ class AsyncPromptCompressor:
             total_savings=data["total_savings"],
             overall_compression_ratio=data["overall_compression_ratio"],
         )
+
+    async def health_check(self) -> bool:
+        """Check whether the prompt-compress API server is healthy (async).
+
+        Returns ``True`` if the server responds with a 200 status on the
+        ``/health`` endpoint, ``False`` otherwise.
+        """
+        try:
+            resp = await self._client.get("/health")
+            return resp.status_code == 200
+        except Exception:
+            return False
 
     async def close(self) -> None:
         await self._client.aclose()

@@ -1,5 +1,6 @@
 """Tests for prompt_compress client and models."""
 
+import httpx
 import pytest
 
 from prompt_compress import (
@@ -122,11 +123,53 @@ class TestSyncClientBasics:
         assert client.base_url == "http://localhost:3000"
         client.close()
 
+    def test_health_check_ok(self, httpx_mock):
+        """health_check returns True when /health responds 200."""
+        httpx_mock.add_response(status_code=200, text="ok")
+        client = PromptCompressor(base_url="http://localhost:3000")
+        assert client.health_check() is True
+        client.close()
+
+    def test_health_check_fail(self, httpx_mock):
+        """health_check returns False when /health responds non-200."""
+        httpx_mock.add_response(status_code=503, text="unavailable")
+        client = PromptCompressor(base_url="http://localhost:3000")
+        assert client.health_check() is False
+        client.close()
+
+    def test_health_check_exception(self, httpx_mock):
+        """health_check returns False on network errors."""
+        httpx_mock.add_exception(httpx.ConnectError("Connection refused"))
+        client = PromptCompressor(base_url="http://localhost:3000")
+        assert client.health_check() is False
+        client.close()
+
 
 class TestAsyncClientBasics:
     def test_init(self):
         client = AsyncPromptCompressor(base_url="http://localhost:9999", api_key="test-key")
         assert client.base_url == "http://localhost:9999"
+
+    async def test_async_health_check_ok(self, httpx_mock):
+        """async health_check returns True when /health responds 200."""
+        httpx_mock.add_response(status_code=200, text="ok")
+        client = AsyncPromptCompressor(base_url="http://localhost:3000")
+        assert await client.health_check() is True
+        await client.close()
+
+    async def test_async_health_check_fail(self, httpx_mock):
+        """async health_check returns False when /health responds non-200."""
+        httpx_mock.add_response(status_code=503, text="unavailable")
+        client = AsyncPromptCompressor(base_url="http://localhost:3000")
+        assert await client.health_check() is False
+        await client.close()
+
+    async def test_async_health_check_exception(self, httpx_mock):
+        """async health_check returns False on network errors."""
+        httpx_mock.add_exception(httpx.ConnectError("Connection refused"))
+        client = AsyncPromptCompressor(base_url="http://localhost:3000")
+        assert await client.health_check() is False
+        await client.close()
 
 
 class TestMetricsModels:

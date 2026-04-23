@@ -97,6 +97,12 @@ Make prompt-compress usable as a compression layer for hermes-agent workflows, r
   - Added Rust unit tests for metrics endpoint: empty initially, tracks single compression, session_id+agent, filters by session_id, filters by agent, aggregates multiple calls (6 tests, all passing)
   - Total Rust tests: 164 passing
 
+## Phase 6: Production Hardening (Ongoing)
+- [x] Health check support in Python SDK
+  - Added `health_check()` to `PromptCompressor` and `AsyncPromptCompressor` — probes `/health` endpoint and returns `True`/`False`
+  - 6 unit tests: sync ok/fail/exception + async ok/fail/exception (all passing)
+  - Useful for hermes plugin to verify server availability before compression attempts
+
 ## Completed
 - Phase 1 (Python SDK): `sdk/python/` created with `PromptCompressor` (sync) and `AsyncPromptCompressor` (async), dataclass models, `py.typed` marker, pyproject.toml with setuptools backend, 8 passing unit tests.
 - Phase 2 (Hermes Skill): SKILL.md created and installed to `~/.hermes/skills/software-development/prompt-compress/`. Covers SDK usage, CLI usage, presets, endpoints, error handling, and tips. Includes `install.sh`.
