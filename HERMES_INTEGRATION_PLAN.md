@@ -106,6 +106,10 @@ Make prompt-compress usable as a compression layer for hermes-agent workflows, r
   - Added "Python SDK" section with install instructions, basic/async usage, and middleware mode examples
   - Added "Hermes Agent Integration" section with skill overview, features, and enablement config
   - Updated repository layout diagram to include `sdk/python/`, `hermes-skill/`, and `hermes_plugin/`
+- [x] Add GitHub Actions CI workflow
+  - Created `.github/workflows/ci.yml` with three jobs: Rust (`cargo check --all && cargo test --all`), Python SDK unit tests, and hermes plugin tests
+  - Runs on push and PR to `master`
+  - Uses `rust-cache` and `pip` caching for fast builds
 
 ## Completed
 - Phase 1 (Python SDK): `sdk/python/` created with `PromptCompressor` (sync) and `AsyncPromptCompressor` (async), dataclass models, `py.typed` marker, pyproject.toml with setuptools backend, 8 passing unit tests.
