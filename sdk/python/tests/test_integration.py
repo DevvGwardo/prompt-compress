@@ -13,7 +13,7 @@ The tests will be automatically skipped if the server is not reachable.
 import pytest
 import httpx
 
-from prompt_compress import PromptCompressor, AsyncPromptCompressor, CompressionSettings
+from prompt_compress import PromptCompressor, AsyncPromptCompressor, CompressionSettings, CompressPresetResponse
 
 
 # Skip all tests in this module if the API server is not reachable
@@ -160,3 +160,62 @@ class TestLiveAPIResponseContent:
         result = client.compress(text)
         assert result.output
         client.close()
+
+
+class TestLiveAPIPresetSync:
+    """Tests for preset endpoint (sync)."""
+
+    def test_preset_system(self):
+        """Test system preset compresses aggressively."""
+        client = PromptCompressor()
+        text = "This is a system prompt telling the agent to analyze code and fix bugs."
+        result = client.compress_preset(text, "system")
+        assert isinstance(result, CompressPresetResponse)
+        assert result.preset == "system"
+        assert result.output
+        assert result.output_tokens > 0
+        client.close()
+
+    def test_preset_memory(self):
+        """Test memory preset compresses more aggressively."""
+        client = PromptCompressor()
+        text = "Previous conversation memory: user asked about Python list comprehensions."
+        result = client.compress_preset(text, "memory")
+        assert result.preset == "memory"
+        assert result.output
+        client.close()
+
+    def test_preset_invalid_returns_error(self):
+        """Test invalid preset raises HTTP error."""
+        client = PromptCompressor()
+        with pytest.raises(httpx.HTTPStatusError):
+            client.compress_preset("test", "invalid-preset")
+        client.close()
+
+    def test_preset_tools(self):
+        """Test tools preset works."""
+        client = PromptCompressor()
+        text = "Tool definition for search_web: query string, returns JSON."
+        result = client.compress_preset(text, "tools")
+        assert result.preset == "tools"
+        assert result.output
+        client.close()
+
+
+class TestLiveAPIPresetAsync:
+    """Tests for preset endpoint (async)."""
+
+    @pytest.mark.asyncio
+    async def test_async_preset_context(self):
+        """Test async context preset."""
+        async with AsyncPromptCompressor() as client:
+            result = await client.compress_preset("Some context here", "context")
+            assert result.preset == "context"
+            assert result.output
+
+    @pytest.mark.asyncio
+    async def test_async_preset_invalid_raises(self):
+        """Test async invalid preset raises."""
+        async with AsyncPromptCompressor() as client:
+            with pytest.raises(httpx.HTTPStatusError):
+                await client.compress_preset("test", "nope")

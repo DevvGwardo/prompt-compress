@@ -8,7 +8,10 @@ Make prompt-compress usable as a compression layer for hermes-agent workflows, r
 - [x] `PromptCompressor` class wrapping the HTTP API (sync + async)
 - [x] Type hints, py.typed marker
 - [x] PyPI-ready setup with pyproject.toml (setuptools backend)
-- [ ] Integration tests against live API (requires running compress-api server)
+- [x] Integration tests against live API (requires running compress-api server)
+  - Verified: 14 base integration tests pass (sync + async, aggressiveness, content quality)
+  - Added 6 preset endpoint integration tests (system, memory, tools, context, invalid preset 400, async)
+  - Total Python SDK tests: 28 passing
 
 ## Phase 2: Hermes Skill (Week 1-2)
 - [x] Create hermes skill at `~/.hermes/skills/prompt-compress/` (source: `hermes-skill/SKILL.md`, installed to `software-development/prompt-compress`)

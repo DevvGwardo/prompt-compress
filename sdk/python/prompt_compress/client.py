@@ -6,7 +6,7 @@ from typing import Optional
 
 import httpx
 
-from .models import CompressRequest, CompressResponse, CompressionSettings
+from .models import CompressRequest, CompressResponse, CompressPresetResponse, CompressionSettings
 
 _DEFAULT_BASE_URL = "http://localhost:3000"
 
@@ -24,6 +24,16 @@ def _build_payload(req: CompressRequest) -> dict:
 
 def _parse_response(data: dict) -> CompressResponse:
     return CompressResponse(
+        output=data["output"],
+        output_tokens=data["output_tokens"],
+        original_input_tokens=data["original_input_tokens"],
+        compression_ratio=data["compression_ratio"],
+    )
+
+
+def _parse_preset_response(data: dict) -> CompressPresetResponse:
+    return CompressPresetResponse(
+        preset=data["preset"],
         output=data["output"],
         output_tokens=data["output_tokens"],
         original_input_tokens=data["original_input_tokens"],
@@ -78,6 +88,22 @@ class PromptCompressor:
         resp.raise_for_status()
         return _parse_response(resp.json())
 
+    def compress_preset(
+        self,
+        text: str,
+        preset: str,
+        *,
+        target_model: str = "gpt-4",
+    ) -> CompressPresetResponse:
+        """Compress a text prompt using a named preset.
+
+        Supported presets: ``system``, ``context``, ``tools``, ``memory``.
+        """
+        payload = {"input": text, "target_model": target_model}
+        resp = self._client.post(f"/v1/compress/preset/{preset}", json=payload)
+        resp.raise_for_status()
+        return _parse_preset_response(resp.json())
+
     def close(self) -> None:
         self._client.close()
 
@@ -130,6 +156,22 @@ class AsyncPromptCompressor:
         resp = await self._client.post("/v1/compress", json=_build_payload(req))
         resp.raise_for_status()
         return _parse_response(resp.json())
+
+    async def compress_preset(
+        self,
+        text: str,
+        preset: str,
+        *,
+        target_model: str = "gpt-4",
+    ) -> CompressPresetResponse:
+        """Compress a text prompt using a named preset (async).
+
+        Supported presets: ``system``, ``context``, ``tools``, ``memory``.
+        """
+        payload = {"input": text, "target_model": target_model}
+        resp = await self._client.post(f"/v1/compress/preset/{preset}", json=payload)
+        resp.raise_for_status()
+        return _parse_preset_response(resp.json())
 
     async def close(self) -> None:
         await self._client.aclose()

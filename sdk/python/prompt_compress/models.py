@@ -30,3 +30,14 @@ class CompressResponse:
     output_tokens: int
     original_input_tokens: int
     compression_ratio: float
+
+
+@dataclass
+class CompressPresetResponse:
+    """Response body from POST /v1/compress/preset/{name}."""
+
+    preset: str
+    output: str
+    output_tokens: int
+    original_input_tokens: int
+    compression_ratio: float
