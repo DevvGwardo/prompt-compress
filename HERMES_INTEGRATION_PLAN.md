@@ -65,7 +65,15 @@ Make prompt-compress usable as a compression layer for hermes-agent workflows, r
   - `cargo check --all && cargo test --all` pass (153 tests total)
 
 ## Phase 5: Deep Integration (Week 3-4)
-- [ ] Middleware mode: intercept hermes LLM calls transparently
+- [x] Middleware mode: intercept hermes LLM calls transparently
+  - Implemented `CompressMiddleware` (sync) and `AsyncCompressMiddleware` (async) in `sdk/python/prompt_compress/middleware.py`
+  - Wraps any callable that accepts `messages` kwarg (e.g. OpenAI/Anthropic client methods)
+  - Transparently compresses system prompts (configurable min chars, min savings, preset)
+  - Transparently compresses old conversation context (protects N recent user+assistant turn pairs)
+  - Tracks cumulative metrics: `total_input_tokens`, `total_output_tokens`, `total_savings`, `calls_made`, `compression_ratio`
+  - Error handling modes: `warn` (log + continue), `raise`, `ignore`
+  - Supports multimodal content blocks (extracts text parts)
+  - 26 Python SDK unit tests added (helpers + sync + async middleware), all passing
 - [ ] Token budget enforcement: compress to fit within model limits
 - [ ] Compression caching: hash-based dedup for repeated prompts
 - [ ] Metrics endpoint: track savings per session/agent
