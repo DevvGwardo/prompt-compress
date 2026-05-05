@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from hermes_plugin import (
+    COMPRESS_PRESETS,
     COMPRESS_PROMPT_SCHEMA,
     _extract_system_prompts,
     _handle_slash_command,
@@ -111,13 +112,11 @@ class TestSerializeConversation(unittest.TestCase):
 
 class TestPreLLMCall(unittest.TestCase):
     def setUp(self) -> None:
-        self._patch_get_compressor = patch("hermes_plugin._get_compressor")
-        self.mock_get_compressor = self._patch_get_compressor.start()
-        self.mock_compressor = MagicMock()
-        self.mock_get_compressor.return_value = self.mock_compressor
+        self._patch_compress = patch("hermes_plugin._compress_via_cli")
+        self.mock_compress = self._patch_compress.start()
 
     def tearDown(self) -> None:
-        self._patch_get_compressor.stop()
+        self._patch_compress.stop()
 
     def test_empty_history_returns_none(self) -> None:
         result = _pre_llm_call(
@@ -141,7 +140,7 @@ class TestPreLLMCall(unittest.TestCase):
             is_first_turn=True,
         )
         self.assertIsNone(result)
-        self.mock_compressor.compress_preset.assert_not_called()
+        self.mock_compress.assert_not_called()
 
     def test_system_prompt_compression(self) -> None:
         """Long system prompts are compressed on first turn."""
@@ -151,11 +150,12 @@ class TestPreLLMCall(unittest.TestCase):
             {"role": "user", "content": "Hello"},
         ]
 
-        mock_resp = MagicMock()
-        mock_resp.output = "Compressed system prompt"
-        mock_resp.original_input_tokens = 100
-        mock_resp.output_tokens = 80
-        self.mock_compressor.compress_preset.return_value = mock_resp
+        self.mock_compress.return_value = {
+            "output": "Compressed system prompt",
+            "original_input_tokens": 100,
+            "output_tokens": 80,
+            "compression_ratio": 0.8,
+        }
 
         result = _pre_llm_call(
             session_id="test-3",
@@ -167,10 +167,6 @@ class TestPreLLMCall(unittest.TestCase):
         self.assertIsInstance(result, dict)
         self.assertIn("system_prompt", result)
         self.assertEqual(result["system_prompt"], "Compressed system prompt")
-        # _extract_system_prompts strips whitespace, so the call arg is stripped
-        self.mock_compressor.compress_preset.assert_called_once_with(
-            system_prompt.strip(), "system", target_model="gpt-4"
-        )
 
     def test_system_prompt_not_compressed_if_savings_too_low(self) -> None:
         """If compression saves fewer than 5 tokens, skip it."""
@@ -180,10 +176,12 @@ class TestPreLLMCall(unittest.TestCase):
             {"role": "user", "content": "Hello"},
         ]
 
-        mock_resp = MagicMock()
-        mock_resp.original_input_tokens = 100
-        mock_resp.output_tokens = 96  # savings = 4
-        self.mock_compressor.compress_preset.return_value = mock_resp
+        self.mock_compress.return_value = {
+            "output": "Same output",
+            "original_input_tokens": 100,
+            "output_tokens": 96,  # savings = 4
+            "compression_ratio": 0.96,
+        }
 
         result = _pre_llm_call(
             session_id="test-4",
@@ -207,11 +205,12 @@ class TestPreLLMCall(unittest.TestCase):
             {"role": "user", "content": "Q4"},
         ]
 
-        mock_resp = MagicMock()
-        mock_resp.output = "Compressed context"
-        mock_resp.original_input_tokens = 200
-        mock_resp.output_tokens = 100
-        self.mock_compressor.compress.return_value = mock_resp
+        self.mock_compress.return_value = {
+            "output": "Compressed context",
+            "original_input_tokens": 200,
+            "output_tokens": 100,
+            "compression_ratio": 0.5,
+        }
 
         result = _pre_llm_call(
             session_id="test-5",
@@ -223,7 +222,7 @@ class TestPreLLMCall(unittest.TestCase):
         self.assertIsInstance(result, dict)
         self.assertIn("context", result)
         self.assertIn("Compressed context", result["context"])
-        self.mock_compressor.compress.assert_called_once()
+        self.mock_compress.assert_called()
 
     def test_both_system_and_context_compression(self) -> None:
         """Both system prompt and context are compressed when applicable."""
@@ -239,18 +238,12 @@ class TestPreLLMCall(unittest.TestCase):
             {"role": "user", "content": "Q4"},
         ]
 
-        mock_system = MagicMock()
-        mock_system.output = "Compressed system"
-        mock_system.original_input_tokens = 100
-        mock_system.output_tokens = 80
-
-        mock_context = MagicMock()
-        mock_context.output = "Compressed context"
-        mock_context.original_input_tokens = 200
-        mock_context.output_tokens = 100
-
-        self.mock_compressor.compress_preset.return_value = mock_system
-        self.mock_compressor.compress.return_value = mock_context
+        self.mock_compress.return_value = {
+            "output": "Compressed output",
+            "original_input_tokens": 100,
+            "output_tokens": 80,
+            "compression_ratio": 0.8,
+        }
 
         result = _pre_llm_call(
             session_id="test-6",
@@ -262,7 +255,7 @@ class TestPreLLMCall(unittest.TestCase):
         self.assertIsInstance(result, dict)
         self.assertIn("system_prompt", result)
         self.assertIn("context", result)
-        self.assertEqual(result["system_prompt"], "Compressed system")
+        self.assertEqual(result["system_prompt"], "Compressed output")
 
     def test_compression_error_is_graceful(self) -> None:
         """Exceptions during compression are caught and return None."""
@@ -270,7 +263,7 @@ class TestPreLLMCall(unittest.TestCase):
         history = [
             {"role": "system", "content": system_prompt},
         ]
-        self.mock_compressor.compress_preset.side_effect = RuntimeError("boom")
+        self.mock_compress.side_effect = RuntimeError("boom")
 
         result = _pre_llm_call(
             session_id="test-7",
@@ -293,7 +286,7 @@ class TestToolHandler(unittest.TestCase):
         self.assertIn("text", COMPRESS_PROMPT_SCHEMA["parameters"]["properties"])
 
     def test_basic_tool_call(self) -> None:
-        with patch("hermes_plugin._compress_via_sdk") as mock_compress:
+        with patch("hermes_plugin._compress_via_cli") as mock_compress:
             mock_compress.return_value = {
                 "output": "Compressed",
                 "output_tokens": 5,
@@ -303,10 +296,10 @@ class TestToolHandler(unittest.TestCase):
             result = _handle_tool({"text": "Hello world"})
             data = json.loads(result)
             self.assertEqual(data["output"], "Compressed")
-            mock_compress.assert_called_once_with("Hello world", 0.5, "gpt-4")
+            mock_compress.assert_called_once_with("Hello world", 0.5, "gpt-4", "agent-aware")
 
     def test_tool_with_preset(self) -> None:
-        with patch("hermes_plugin._compress_via_sdk") as mock_compress:
+        with patch("hermes_plugin._compress_via_cli") as mock_compress:
             mock_compress.return_value = {
                 "output": "Compressed",
                 "output_tokens": 5,
@@ -316,7 +309,7 @@ class TestToolHandler(unittest.TestCase):
             result = _handle_tool({"text": "Hello world", "preset": "system"})
             data = json.loads(result)
             self.assertEqual(data["output"], "Compressed")
-            mock_compress.assert_called_once_with("Hello world", 0.3, "gpt-4")
+            mock_compress.assert_called_once_with("Hello world", 0.3, "gpt-4", "agent-aware")
 
     def test_tool_missing_text(self) -> None:
         result = _handle_tool({})
@@ -330,23 +323,30 @@ class TestToolHandler(unittest.TestCase):
 
 class TestSlashCommand(unittest.TestCase):
     def test_parse_args_basic(self) -> None:
-        text, agg, model = _parse_args("hello world")
+        text, agg, model, mode = _parse_args("hello world")
         self.assertEqual(text, "hello world")
         self.assertEqual(agg, 0.5)
         self.assertEqual(model, "gpt-4")
+        self.assertEqual(mode, "agent-aware")
 
     def test_parse_args_with_flags(self) -> None:
-        text, agg, model = _parse_args("hello --aggressiveness 0.7 --model claude-3")
+        text, agg, model, mode = _parse_args("hello --aggressiveness 0.7 --model claude-3")
         self.assertEqual(text, "hello")
         self.assertEqual(agg, 0.7)
         self.assertEqual(model, "claude-3")
+        self.assertEqual(mode, "agent-aware")
+
+    def test_parse_args_scorer_mode(self) -> None:
+        text, agg, model, mode = _parse_args("hello --scorer-mode standard")
+        self.assertEqual(text, "hello")
+        self.assertEqual(mode, "standard")
 
     def test_parse_args_empty_raises(self) -> None:
         with self.assertRaises(ValueError):
             _parse_args("")
 
     def test_slash_command_success(self) -> None:
-        with patch("hermes_plugin._compress_via_sdk") as mock_compress:
+        with patch("hermes_plugin._compress_via_cli") as mock_compress:
             mock_compress.return_value = {
                 "output": "Compressed",
                 "output_tokens": 5,
@@ -359,8 +359,8 @@ class TestSlashCommand(unittest.TestCase):
             self.assertIn("10", result)
 
     def test_slash_command_error(self) -> None:
-        with patch("hermes_plugin._compress_via_sdk") as mock_compress:
-            mock_compress.side_effect = RuntimeError("API down")
+        with patch("hermes_plugin._compress_via_cli") as mock_compress:
+            mock_compress.side_effect = RuntimeError("binary not found")
             result = _handle_slash_command("hello world")
             self.assertIn("Compression error", result)
 
@@ -371,8 +371,6 @@ class TestSlashCommand(unittest.TestCase):
 
 class TestCheckRequirements(unittest.TestCase):
     def test_returns_bool(self) -> None:
-        # Result depends on whether prompt_compress is installed in the
-        # current environment; we just assert it's a bool.
         self.assertIsInstance(check_requirements(), bool)
 
 

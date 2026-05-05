@@ -1,23 +1,46 @@
 ---
 name: prompt-compress
-description: Compress prompts and context windows to reduce LLM token costs. Uses the prompt-compress toolkit to score token importance and remove low-value tokens before sending to LLMs.
+description: Compress prompts via the compress CLI binary — tool, slash command, and auto-compression hooks for Hermes Agent.
 category: software-development
-version: 1.0.0
+version: 1.1.0
 author: prompt-compress
 metadata:
   hermes:
     tags: [compression, tokens, cost-optimization, llm]
     homepage: https://github.com/DevvGwardo/prompt-compress
 prerequisites:
-  commands: [python3]
-  pip_packages: [prompt-compress]
+  commands: [compress]
   environment_variables:
-    - PROMPT_COMPRESS_BASE_URL (optional, default: http://localhost:3000)
+    - PROMPT_COMPRESS_BIN (optional, path to compress binary)
 ---
 
 # Prompt Compress
 
-Compress prompts and context windows to reduce LLM token costs. The prompt-compress toolkit scores token importance and removes low-value tokens while preserving meaning.
+Compress prompts and context windows to reduce LLM token costs. Uses the `compress` CLI binary (Rust, heuristic scoring — no ONNX model needed) to score token importance and remove low-value tokens while preserving meaning.
+
+## Integration with Hermes Agent
+
+The `prompt-compress` plugin is installed at `~/.hermes/plugins/prompt-compress/` and enabled in config.yaml. It provides:
+
+- `/prompt-compress` slash command — compress text inline
+- `compress_prompt` tool — LLM-callable tool for on-demand compression
+- `pre_llm_call` hook — auto-compresses system prompts & old context on every turn
+
+### How It Works
+
+The plugin calls the `compress` CLI binary directly via subprocess. No Python SDK, no HTTP API server, no external dependencies. The binary uses heuristic scoring by default (fast, no model download needed).
+
+Binary location: `~/prompt-compress/target/release/compress`
+
+### Plugin Status
+
+Check if the plugin is loaded:
+
+```
+hermes plugins list
+```
+
+Or in Hermes TUI, the tool should show up in the available tools list.
 
 ## When to Use
 
@@ -27,57 +50,33 @@ Compress prompts and context windows to reduce LLM token costs. The prompt-compr
 - Compressing accumulated conversation history
 - Shrinking tool/function definition payloads
 
-## Quick Start
+## Using the Tool
 
-### Python SDK (Recommended)
+The `compress_prompt` tool accepts:
 
-```python
-from prompt_compress import PromptCompressor
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `text` | string | required | Text to compress |
+| `aggressiveness` | number | 0.5 | 0.0 (minimal) to 1.0 (max) |
+| `target_model` | string | gpt-4 | Model for token counting |
+| `preset` | string | — | system(0.3), context(0.5), tools(0.2), memory(0.6) |
+| `scorer_mode` | string | agent-aware | standard or agent-aware |
 
-# Initialize (requires compress-api running on localhost:3000)
-client = PromptCompressor(base_url="http://localhost:3000")
+## Using the Slash Command
 
-# Compress a prompt
-result = client.compress(
-    "Your long prompt text here...",
-    aggressiveness=0.5,  # 0.0 = no compression, 1.0 = aggressive
-    target_model="gpt-4",
-)
-print(f"Saved {result.original_input_tokens - result.output_tokens} tokens")
-print(f"Compressed: {result.output}")
+```
+/prompt-compress <text> [--aggressiveness N] [--model NAME] [--scorer-mode standard|agent-aware]
 ```
 
-### Async Usage
+Examples:
 
-```python
-from prompt_compress import AsyncPromptCompressor
-
-async with AsyncPromptCompressor(base_url="http://localhost:3000") as client:
-    result = await client.compress("Your text...", aggressiveness=0.3)
+```
+/prompt-compress This is a very long prompt that I want to compress to save tokens
+/prompt-compress Some text here --aggressiveness 0.7 --model claude-3-opus
+/prompt-compress Tools definitions here --scorer-mode standard --aggressiveness 0.2
 ```
 
-### CLI Usage
-
-```bash
-# Direct compression via CLI
-prompt-compress compress --text "Your long prompt here" --aggressiveness 0.5
-
-# Or via the API
-curl -X POST http://localhost:3000/v1/compress \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "scorer-v0.1",
-    "input": "Your long prompt here...",
-    "compression_settings": {
-      "aggressiveness": 0.5,
-      "target_model": "gpt-4"
-    }
-  }'
-```
-
-## Compression Presets for Hermes
-
-Use these aggressiveness levels based on what you are compressing:
+## Compression Presets
 
 | Preset | Aggressiveness | Use Case |
 |--------|---------------|----------|
@@ -86,66 +85,42 @@ Use these aggressiveness levels based on what you are compressing:
 | `tools` | 0.2 | Tool definitions — preserve schemas and structure |
 | `memory` | 0.6 | Memory/recall entries — aggressive, key facts only |
 
-### Choosing a Preset
+## Scorer Modes
 
-```python
-from prompt_compress import PromptCompressor
+- `agent-aware` (default) — Optimized for agent instructions and tool calls. Boosts instruction verbs, demotes conversational filler.
+- `standard` — General-purpose text compression. Use for non-agent content.
 
-client = PromptCompressor()
+## Auto-Compression Hooks
 
-# Compress a system prompt (conservative)
-result = client.compress(system_prompt, aggressiveness=0.3, target_model="gpt-4")
+The `pre_llm_call` hook runs before every LLM call and:
 
-# Compress accumulated context (balanced)
-result = client.compress(context_window, aggressiveness=0.5, target_model="gpt-4")
+1. **System prompt compression** — compresses role=system messages using the `system` preset when >150 chars
+2. **Context window compression** — preserves last 2 turns, compresses everything before that when there are 4+ messages
 
-# Compress tool definitions (very conservative — schemas must survive)
-result = client.compress(tool_defs, aggressiveness=0.2, target_model="gpt-4")
+Both hooks stop running if they save fewer than 5-10 tokens (diminishing returns).
 
-# Compress memory entries (aggressive — just the facts)
-result = client.compress(memory_text, aggressiveness=0.6, target_model="gpt-4")
+## CLI Usage (direct)
+
+```bash
+# Compress from stdin
+echo "Your long text here..." | compress --format json --stats
+
+# Compress with options
+compress -i "Your text" -a 0.5 -m gpt-4 --scorer-mode agent-aware --format json
+
+# Show human-readable stats
+compress -i "Your text" -a 0.5 --stats
 ```
 
 ## Compression Response
 
-```python
-@dataclass
-class CompressResponse:
-    output: str              # The compressed text
-    output_tokens: int       # Token count after compression
-    original_input_tokens: int  # Token count before compression
-    compression_ratio: float # Ratio of output/input (lower = more compressed)
-```
-
-## API Endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/v1/compress` | Compress text directly |
-| POST | `/v1/chat/completions` | Proxy with auto-compression (OpenAI format) |
-| POST | `/v1/messages` | Proxy with auto-compression (Anthropic format) |
-
-## Supported Models
-
-- `scorer-v0.1` — ML-based token importance scorer (default, higher quality)
-- `heuristic-v0.1` — Rule-based scorer (faster, no ML model needed)
-
-## Error Handling
-
-```python
-from prompt_compress import PromptCompressor
-import httpx
-
-client = PromptCompressor()
-
-try:
-    result = client.compress("Some text")
-except httpx.HTTPStatusError as e:
-    # API returned 4xx/5xx
-    print(f"API error: {e.response.status_code} - {e.response.text}")
-except httpx.ConnectError:
-    # compress-api not running
-    print("Cannot connect to compress-api. Is it running on localhost:3000?")
+```json
+{
+  "output": "compressed text...",
+  "output_tokens": 18,
+  "original_input_tokens": 27,
+  "compression_ratio": 0.67
+}
 ```
 
 ## Tips

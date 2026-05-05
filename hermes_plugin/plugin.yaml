@@ -1,6 +1,6 @@
 name: prompt-compress
-version: 1.0.0
-description: Integrate prompt-compress toolkit as a callable tool and slash command for Hermes agent.
+version: 1.1.0
+description: Compress prompts via prompt-compress CLI binary — tool, slash command, and auto-compression hooks.
 author: prompt-compress
 provides_hooks:
   - on_session_start
@@ -10,6 +10,5 @@ metadata:
     tags: [compression, tokens, cost-optimization, llm]
     homepage: https://github.com/DevvGwardo/prompt-compress
 prerequisites:
-  pip_packages: [prompt-compress]
   environment_variables:
-    - PROMPT_COMPRESS_BASE_URL (optional, default: http://localhost:3000)
+    - PROMPT_COMPRESS_BIN (optional, path to compress binary)

@@ -555,27 +555,71 @@ Middleware features:
 
 ## Hermes Agent Integration
 
-A dedicated Hermes skill is included at `hermes-skill/` and installed to `~/.hermes/skills/software-development/prompt-compress/`.
+A Hermes **plugin** + **skill** that provides prompt compression as a callable tool,
+slash command, and auto-compression hooks for every LLM call.
 
-The skill provides:
+### Setup
 
-- Pre-compression of system prompts before LLM calls
-- Post-compression of conversation context to extend window length
-- Auto-detection of prompt type (system, context, tools, memory) with appropriate presets
-- Slash command `/compress` for on-demand compression
+The `compress` binary must be built first:
 
-Enable in your Hermes agent config:
+```bash
+cd ~/prompt-compress
+cargo build --release
+```
+
+The plugin is at `hermes_plugin/` and should be enabled in `~/.hermes/config.yaml`:
 
 ```yaml
 plugins:
-  - prompt-compress
+  enabled:
+    - prompt-compress
 ```
 
-Environment:
+It is already enabled in this setup.
+
+### What It Provides
+
+| Feature | Description |
+|---------|-------------|
+| `/prompt-compress <text>` | Slash command — compress text inline |
+| `compress_prompt` tool | LLM-callable tool with presets and scorer modes |
+| `pre_llm_call` hook | Auto-compresses system prompts (>150 chars) and old context (4+ turns) |
+
+### How It Works
+
+The plugin calls the `compress` CLI binary directly via subprocess (heuristic scoring).
+No Python SDK, no HTTP server, no model download required.
+
+### Compression Presets
+
+| Preset | Aggressiveness | Use Case |
+|--------|---------------|----------|
+| `system` | 0.3 | System/developer prompts — keep core instructions |
+| `context` | 0.5 | Accumulated context — balance detail vs size |
+| `tools` | 0.2 | Tool definitions — preserve schemas and structure |
+| `memory` | 0.6 | Memory/recall entries — aggressive, key facts only |
+
+### Scorer Modes
+
+- `agent-aware` (default) — optimized for agent instructions and tool calls
+- `standard` — general-purpose text compression
+
+### Desktop Launcher
+
+To run the HTTP API server (optional, not needed for Hermes integration):
+
+- `~/Desktop/prompt-compress-api.command` — double-click to start compress-api on port 3000
+
+### Full API Server
+
+Start the HTTP API for non-Hermes use:
 
 ```bash
-export PROMPT_COMPRESS_BASE_URL=http://localhost:3000
+cd ~/prompt-compress
+cargo run --release -p compress-api
 ```
+
+See the API section below for endpoint details.
 
 ## Performance
 
