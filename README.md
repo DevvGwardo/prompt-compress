@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/repo-banner.png" alt="PromptCompress banner" width="100%">
+</p>
+
 # PromptCompress
 
 [![Release](https://img.shields.io/badge/release-model--v0.1.0-blue)](https://github.com/DevvGwardo/prompt-compress/releases/tag/model-v0.1.0)
@@ -87,14 +91,9 @@ Tokens saved:       5
 
 ## Architecture
 
-```text
-input text
-  -> extract <ttc_safe> regions
-  -> score tokens (HeuristicScorer or OnnxScorer)
-  -> keep tokens above aggressiveness threshold
-  -> rebuild output text
-  -> report token savings
-```
+<p align="center">
+  <img src="docs/repo-architecture.png" alt="Compression pipeline architecture" width="90%">
+</p>
 
 Compression rules:
 
@@ -657,32 +656,9 @@ cargo build --release
 
 ## Repository Layout
 
-```text
-prompt-compress/
-├── crates/
-│   ├── compress-core/
-│   ├── compress-cli/
-│   └── compress-api/
-├── sdk/
-│   └── python/                  (Python SDK: client, middleware, presets)
-├── hermes-skill/                (Hermes agent skill + plugin)
-├── hermes_plugin/               (Hermes plugin Python implementation)
-├── integrations/
-│   ├── claude-code/
-│   │   └── prompt-compress/    (UserPromptSubmit hook plugin)
-│   └── openclaw/
-│       └── prompt-compress/
-├── scripts/
-│   ├── claude-compress
-│   ├── claude-chat-compress
-│   ├── codex-compress
-│   ├── codex-chat-compress
-│   ├── codex-proxy
-│   └── publish-wiki.sh
-├── training/
-├── wiki/
-└── models/
-```
+<p align="center">
+  <img src="docs/repo-layout.png" alt="Repository layout" width="80%">
+</p>
 
 ## License
 
